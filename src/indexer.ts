@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import fs from 'node:fs';
+import path from 'node:path';
 import { Interface, JsonRpcProvider, id, type Log } from 'ethers';
 import pc from 'picocolors';
 import { CONTRACT_ADDRESS, PUNKS_ABI, DEFAULTS, DEFAULT_DEPLOY_BLOCK } from './constants.js';
@@ -154,6 +156,36 @@ async function discoverDeployBlock(provider: JsonRpcProvider) {
 }
 
 export async function runSync(): Promise<void> {
+  // Acquire a writer lock to signal other processes (e.g., timestamp backfill)
+  const DATA_DIR = path.join(process.cwd(), 'data');
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  const WRITE_LOCK = path.join(DATA_DIR, '.indexer.write.lock');
+  const writeLock = () => {
+    try {
+      fs.writeFileSync(WRITE_LOCK, JSON.stringify({ pid: process.pid, mode: 'sync', startedAt: Date.now() }));
+      return true;
+    } catch { return false; }
+  };
+  const acquireWriteLock = () => {
+    try {
+      if (fs.existsSync(WRITE_LOCK)) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(WRITE_LOCK, 'utf-8'));
+          const pid = Number(raw?.pid);
+          if (pid && pid > 0) {
+            try { process.kill(pid, 0); } catch { return writeLock(); }
+            throw new Error('Another indexer process appears to be running (write lock present).');
+          }
+        } catch { /* malformed; will overwrite */ }
+      }
+      return writeLock();
+    } catch {
+      return false;
+    }
+  };
+  const releaseWriteLock = () => { try { if (fs.existsSync(WRITE_LOCK)) fs.unlinkSync(WRITE_LOCK); } catch {} };
+  let hasWriteLock = false;
+  try { hasWriteLock = acquireWriteLock(); } catch {}
   const { rpcUrl, startBlock, stopBlock, chunkSize, deployBlockEnv } = getConfig();
   const provider = new JsonRpcProvider(rpcUrl);
   const db = openDb();
@@ -446,11 +478,34 @@ export async function runSync(): Promise<void> {
   const totalParsed = counters.parsed;
   const types = Object.entries(counters.byType).map(([k, v]) => `${k}:${v}`).join(', ');
   console.log(`Parsed events: ${totalParsed}${types ? ' [' + types + ']' : ''}`);
+  if (hasWriteLock) releaseWriteLock();
 }
 
 export async function backfillTimestamps(): Promise<{ blocks: number; updated: number }> {
   const { rpcUrl } = getConfig();
   const db = openDb();
+
+  // Refuse to run if a writer lock exists and is alive
+  const DATA_DIR = path.join(process.cwd(), 'data');
+  const WRITE_LOCK = path.join(DATA_DIR, '.indexer.write.lock');
+  if (fs.existsSync(WRITE_LOCK)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(WRITE_LOCK, 'utf-8'));
+      const pid = Number(raw?.pid);
+      if (pid && pid > 0) {
+        try { process.kill(pid, 0); } catch { /* not alive; continue */ }
+        // If no error, process is alive
+        try { process.kill(pid, 0); } catch {}
+        console.error('Refusing to run timestamp backfill: another indexer is writing (write lock present). Stop sync (TAIL) first.');
+        process.exit(2);
+      }
+    } catch { /* malformed lock; ignore */ }
+  }
+
+  // Create a backfill lock to avoid concurrent backfills
+  const BACKFILL_LOCK = path.join(DATA_DIR, '.indexer.backfill.lock');
+  const releaseBackfillLock = () => { try { if (fs.existsSync(BACKFILL_LOCK)) fs.unlinkSync(BACKFILL_LOCK); } catch {} };
+  try { fs.writeFileSync(BACKFILL_LOCK, JSON.stringify({ pid: process.pid, mode: 'backfill', startedAt: Date.now() })); } catch {}
 
   const tables = [
     'raw_logs',
@@ -572,6 +627,8 @@ export async function backfillTimestamps(): Promise<{ blocks: number; updated: n
   }
   process.stdout.write('\n');
   console.log(`Updated rows: ${fmt(updated)}`);
+  // release backfill lock
+  try { const DATA_DIR = path.join(process.cwd(), 'data'); const BACKFILL_LOCK = path.join(DATA_DIR, '.indexer.backfill.lock'); if (fs.existsSync(BACKFILL_LOCK)) fs.unlinkSync(BACKFILL_LOCK); } catch {}
   return { blocks: blockNumbers.length, updated };
 }
 
