@@ -24,6 +24,87 @@ const TOPIC_NAME = new Map([
   [id('PunkBought(uint256,uint256,address,address)'), 'PunkBought'],
 ]);
 
+function hexToAddress(topic: string | null | undefined): string | null {
+  if (!topic || topic === '0x') return null;
+  const hex = topic.toLowerCase();
+  if (hex.length < 2 + 64) return null;
+  return '0x' + hex.slice(hex.length - 40);
+}
+
+function hexToBigInt(topicOrWord: string | null | undefined): bigint | null {
+  if (!topicOrWord || topicOrWord === '0x') return null;
+  try { return BigInt(topicOrWord); } catch { return null; }
+}
+
+function readWord(data: string | null | undefined, index = 0): string {
+  if (!data) return '0x0';
+  const start = 2 + index * 64;
+  const end = start + 64;
+  if (data.length < end) return '0x0';
+  return '0x' + data.slice(start, end);
+}
+
+function parseLogCompat(log: Log): { name: string; args: any } | null {
+  try {
+    const parsed = iface.parseLog({ topics: log.topics, data: log.data });
+    if (parsed) return { name: parsed.name, args: parsed.args };
+  } catch { /* fallthrough */ }
+
+  const t0 = log.topics?.[0];
+  const name = t0 ? TOPIC_NAME.get(t0) : undefined;
+  if (!name) return null;
+
+  // Manual decoding fallback from topics + data
+  if (name === 'Assign') {
+    const to = hexToAddress(log.topics?.[1]);
+    const punkIndex = hexToBigInt(log.topics?.[2]);
+    if (to == null || punkIndex == null) return null;
+    return { name, args: { to, punkIndex } };
+  }
+  if (name === 'PunkTransfer') {
+    const from = hexToAddress(log.topics?.[1]);
+    const to = hexToAddress(log.topics?.[2]);
+    const punkIndex = hexToBigInt(log.topics?.[3]);
+    if (from == null || to == null || punkIndex == null) return null;
+    return { name, args: { from, to, punkIndex } };
+  }
+  if (name === 'PunkOffered') {
+    const punkIndex = hexToBigInt(log.topics?.[1]);
+    const minValue = hexToBigInt(readWord(log.data, 0));
+    const toAddress = hexToAddress(log.topics?.[2]);
+    if (punkIndex == null || minValue == null) return null;
+    return { name, args: { punkIndex, minValue, toAddress } };
+  }
+  if (name === 'PunkNoLongerForSale') {
+    const punkIndex = hexToBigInt(log.topics?.[1]);
+    if (punkIndex == null) return null;
+    return { name, args: { punkIndex } };
+  }
+  if (name === 'PunkBidEntered') {
+    const punkIndex = hexToBigInt(log.topics?.[1]);
+    const value = hexToBigInt(readWord(log.data, 0));
+    const fromAddress = hexToAddress(log.topics?.[2]);
+    if (punkIndex == null || value == null || fromAddress == null) return null;
+    return { name, args: { punkIndex, value, fromAddress } };
+  }
+  if (name === 'PunkBidWithdrawn') {
+    const punkIndex = hexToBigInt(log.topics?.[1]);
+    const value = hexToBigInt(readWord(log.data, 0));
+    const fromAddress = hexToAddress(log.topics?.[2]);
+    if (punkIndex == null || value == null || fromAddress == null) return null;
+    return { name, args: { punkIndex, value, fromAddress } };
+  }
+  if (name === 'PunkBought') {
+    const punkIndex = hexToBigInt(log.topics?.[1]);
+    const value = hexToBigInt(readWord(log.data, 0));
+    const fromAddress = hexToAddress(log.topics?.[2]);
+    const toAddress = hexToAddress(log.topics?.[3]);
+    if (punkIndex == null || value == null || fromAddress == null || toAddress == null) return null;
+    return { name, args: { punkIndex, value, fromAddress, toAddress } };
+  }
+  return null;
+}
+
 function sleep(ms: number) { return new Promise<void>(r => setTimeout(r, ms)); }
 
 function providerRangeHint(error: unknown): number | null {
@@ -266,17 +347,12 @@ export async function runSync(): Promise<void> {
           log.topics[3] ?? null,
           log.data
         );
-        let parsed: any;
-        try {
-          parsed = iface.parseLog({ topics: log.topics, data: log.data });
-        } catch (e) {
-          // If topic0 is known but parse failed, warn once per chunk
+        const parsed = parseLogCompat(log);
+        if (!parsed) {
           const t0 = log.topics?.[0];
-          const name = t0 ? (TOPIC_NAME.get(t0) || 'UnknownTopic') : 'NoTopic0';
-          if (name) {
-            console.warn(`Warning: failed to parse ${name} @${log.blockNumber}:${log.index} tx=${log.transactionHash}`);
-          }
-          continue; // skip unknown or unparsable
+          const pname = t0 ? (TOPIC_NAME.get(t0) || 'UnknownTopic') : 'NoTopic0';
+          console.warn(`Warning: failed to parse ${pname} @${log.blockNumber}:${log.index} tx=${log.transactionHash}`);
+          continue;
         }
         const name: string = parsed.name;
         const args: any = parsed.args;
