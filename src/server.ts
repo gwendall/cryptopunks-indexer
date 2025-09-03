@@ -2,6 +2,8 @@ import 'dotenv/config';
 import http from 'node:http';
 import url from 'node:url';
 import zlib from 'node:zlib';
+import fs from 'node:fs';
+import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { JsonRpcProvider } from 'ethers';
 import { exportOwners, exportActiveOffers, exportActiveBids, exportFloor, exportEventsSinceCursor, exportEventsFiltered, formatCursor, parseCursor, getLastSyncedBlock } from './indexer.js';
@@ -53,6 +55,15 @@ async function updateLatest() {
 
 // Web server
 const DISABLE_COMPRESSION = process.env.DISABLE_COMPRESSION === '1';
+// Write a PID file for easy stop via pnpm stop (and clean up on errors)
+const dataDir = path.join(process.cwd(), 'data');
+try { if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true }); } catch {}
+const pidFile = path.join(dataDir, '.server.pid');
+try { fs.writeFileSync(pidFile, JSON.stringify({ pid: process.pid, port: PORT, startedAt: Date.now() })); } catch {}
+const cleanupPid = () => { try { fs.unlinkSync(pidFile); } catch {} };
+process.on('exit', cleanupPid);
+process.on('SIGINT', () => { cleanupPid(); process.exit(0); });
+process.on('SIGTERM', () => { cleanupPid(); process.exit(0); });
 const server = http.createServer(async (req, res) => {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -373,6 +384,10 @@ if (process.env.ETH_WS_URL) {
   }
 }
 
+server.on('error', (err) => {
+  // remove pidfile if failed to bind
+  cleanupPid();
+});
 server.listen(PORT, () => {
   console.log(`API listening on :${PORT}`);
 });
