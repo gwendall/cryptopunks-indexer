@@ -81,6 +81,7 @@ Stops with `docker compose down`. Data persists in `./data`.
 - `POLL_INTERVAL_MS` (optional): Poll interval when tailing. Default: `15000`.
 - `DEPLOY_BLOCK` (optional): CryptoPunks contract deploy block. If not set, the indexer auto-discovers it (via getCode binary search) and saves it to the DB meta table.
 - `SKIP_TIMESTAMPS` (optional): `1` to skip fetching block timestamps for speed. Default: `0`.
+- `FILTER_TOPICS` (optional): `1` to request only the tracked event topics (smaller responses; some providers behave better). Default: `0`.
 
 Provider tips:
 - The indexer auto-adapts the block range if your provider rejects large `eth_getLogs` windows (e.g., Alchemy Free limits to 10 blocks).
@@ -92,7 +93,13 @@ How to find the deploy block manually:
 - In the “Transactions” tab, open the “Contract Creation” transaction and note the Block number.
 - Set it via env: `DEPLOY_BLOCK=<that number>` to skip auto-discovery.
 
-Tip: For accurate owners and history, index from block `0`.
+Tip: For accurate owners and history, start at the deploy block (auto‑discovered and saved) or from block `0` (slower, but fine).
+
+Upgrade note: If you ran an older version before 2025-09-03, run a fresh sync to populate Assign correctly:
+
+```
+npm run sync -- --reset
+```
 
 ## Commands
 
@@ -172,8 +179,8 @@ Note: Heroku’s filesystem is ephemeral; prefer a disk‑backed host or switch 
 - Entry points:
   - `src/index.ts`: CLI (sync, export, export-ops, export-events, tailing)
   - `src/indexer.ts`: sync logic, event parsing, exports
-  - `src/db.js`: SQLite schema and helpers
-  - `src/constants.js`: ABI, contract address, defaults
+  - `src/db.ts`: SQLite schema and helpers
+  - `src/constants.ts`: ABI, contract address, defaults
 - Useful envs while iterating:
   - `START_BLOCK=XXXXX` to limit scope
   - `STOP_BLOCK=YYYYY` for short runs
