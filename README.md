@@ -184,6 +184,7 @@ npm run sync -- --reset
 - `npm run backfill:timestamps`: Fill `block_timestamp` on historical rows after a fast backfill that used `SKIP_TIMESTAMPS=1`.
   - Tip: Run this when the indexer is NOT writing (no `TAIL=1`) to avoid SQLite busy locks.
   - Tuning envs: `TS_BACKFILL_BATCH=2000` (DB update batch), `TS_BACKFILL_RPC_BATCH=100` (JSON-RPC batch size), `TS_BACKFILL_CONCURRENCY=8–16`.
+  - Safety: The indexer creates a lock file while syncing and backfilling (`data/.indexer.write.lock`, `data/.indexer.backfill.lock`). Backfill refuses to run if a write lock is active.
 
 ## Data Outputs
 
