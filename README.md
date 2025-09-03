@@ -161,8 +161,9 @@ Base URL: `http://localhost:8080`
     - `address` (match relevant address fields for each type)
   - Returns: `{ events: [...], nextCursor, hasMore, limit, offset, maxLimit }` and headers `X-Next-Cursor`, `X-Has-More`, `X-Limit`, `X-Offset`, `X-Max-Limit`.
 - `GET /v1/events/normalized` — same filters as `/v1/events`, returns normalized event schema for apps
-- WebSocket: `ws://localhost:8080/ws` — pushes `{ type: 'events', events: [...] }` after each sync batch
-- SSE: `/v1/stream/progress` — live runtime sync progress updates (event: `progress` with the same fields as `runtime` in `/v1/progress`)
+- WebSocket: `ws://localhost:8080/ws` — pushes `{ type: 'events', events: [...] }` after each sync batch. Supports initial catch-up with `?fromCursor=block:log&limit=1000&normalized=0`.
+- SSE: `/v1/stream/progress` — live runtime sync progress updates (event: `progress` with the same fields as `runtime` in `/v1/progress`).
+- Dashboard: `GET /progress` — simple HTML page showing live sync progress.
 
 ### Frontend SSE Usage
 
@@ -206,6 +207,30 @@ Notes:
 - CORS is open (`Access-Control-Allow-Origin: *`), so you can connect from any origin.
 - Event name is `progress`. Each event’s `data` is a JSON string; parse it before use.
 - In Next.js/SSR, use this in a client component (it relies on `window.EventSource`).
+
+### WebSocket Catch‑Up From Cursor
+
+Pass your last processed cursor to receive a backlog immediately on connect:
+
+```js
+// Resume from your stored cursor
+const last = localStorage.getItem('punks_cursor') || '0:-1';
+const ws = new WebSocket(`wss://your-host/ws?fromCursor=${encodeURIComponent(last)}&limit=1000`);
+
+ws.onmessage = (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.type === 'events') {
+    for (const e of msg.events) {
+      // process event
+      const cursor = e.cursor || `${e.block_number}:${e.log_index}`;
+      // store latest
+      localStorage.setItem('punks_cursor', cursor);
+    }
+  }
+};
+```
+
+If you don’t pass `fromCursor`, you’ll only receive new batches going forward. Use `/v1/events` to backfill in larger chunks if needed.
 
 Realtime options (SSE vs WebSocket)
 - SSE (`/v1/stream/events`) is the simplest: HTTP-friendly, works behind CDNs/reverse proxies, auto-reconnect is trivial. Great for one-way streams from server → client.

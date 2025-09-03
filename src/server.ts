@@ -159,6 +159,69 @@ const server = http.createServer(async (req, res) => {
       }
       return;
     }
+    if (path === '/progress') {
+      // Lightweight HTML dashboard for runtime progress
+      const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Indexer Progress</title>
+    <style>
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;margin:20px;color:#222}
+      .row{display:flex;gap:8px;align-items:center;margin:6px 0}
+      .bar{height:14px;background:#eee;border-radius:7px;overflow:hidden}
+      .bar>i{display:block;height:100%;background:#0aa35c}
+      code{background:#f6f8fa;padding:2px 4px;border-radius:4px}
+      small{color:#666}
+      .grid{display:grid;grid-template-columns:160px 1fr;gap:8px 16px;align-items:center}
+    </style>
+  </head>
+  <body>
+    <h1>CryptoPunks Indexer — Progress</h1>
+    <div class="row"><button id="refresh">Refresh once</button><small id="status">—</small></div>
+    <div class="row bar" style="width: min(720px, 95vw);"><i id="fill" style="width:0%"></i></div>
+    <div class="grid" style="max-width: 780px;">
+      <div>Syncing</div><div id="isSyncing">—</div>
+      <div>Blocks</div><div id="blocks">—</div>
+      <div>Logs</div><div id="logs">—</div>
+      <div>Window</div><div id="win">—</div>
+      <div>Speed</div><div id="speed">—</div>
+      <div>ETA</div><div id="eta">—</div>
+      <div>Deploy</div><div id="deploy">—</div>
+      <div>Started</div><div id="started">—</div>
+      <div>Updated</div><div id="updated">—</div>
+    </div>
+    <script>
+      function fmtTime(ms){ if(!ms) return '—'; const d=new Date(ms); return d.toLocaleString(); }
+      function fmt(n){ if(n==null) return '—'; return String(n); }
+      async function once(){ const r=await fetch('/v1/progress'); const j=await r.json(); render(j); }
+      function render(j){ const rt=j.runtime||{}; const pct= rt.totalBlocks>0 ? (rt.processedBlocks/rt.totalBlocks)*100 : (rt.isSyncing?0:100); document.getElementById('fill').style.width = Math.max(0,Math.min(100,pct)).toFixed(2)+'%';
+        document.getElementById('status').textContent = rt.statusLine || '—';
+        document.getElementById('isSyncing').textContent = rt.isSyncing ? 'yes' : 'no';
+        document.getElementById('blocks').textContent = `${fmt(rt.processedBlocks)} / ${fmt(rt.totalBlocks)} (${(pct||0).toFixed(2)}%)`;
+        document.getElementById('logs').textContent = fmt(rt.processedLogs);
+        document.getElementById('win').textContent = fmt(rt.windowSize);
+        document.getElementById('speed').textContent = (rt.speedBlocksPerSec||0).toFixed(0) + ' blk/s';
+        document.getElementById('eta').textContent = rt.etaSeconds!=null && isFinite(rt.etaSeconds) ? Math.round(rt.etaSeconds)+'s' : '—';
+        document.getElementById('deploy').textContent = fmt(rt.deployBlock);
+        document.getElementById('started').textContent = fmtTime(rt.startedAt);
+        document.getElementById('updated').textContent = fmtTime(rt.updatedAt);
+      }
+      once();
+      const es = new EventSource('/v1/stream/progress');
+      es.addEventListener('progress', ev => {
+        try { render({ runtime: JSON.parse(ev.data) }); } catch {}
+      });
+      document.getElementById('refresh').onclick = once;
+    </script>
+  </body>
+  </html>`;
+      const buf = Buffer.from(html);
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': buf.length, 'vary': 'Accept-Encoding' });
+      res.end(buf);
+      return;
+    }
     if (path === '/openapi.json') {
       const spec = buildOpenApiSpec('');
       send(200, spec);
@@ -362,10 +425,24 @@ wss.shouldHandle = async (req) => {
   // Allow all origins; tighten if needed
   return true;
 };
-wss.on('connection', (ws: Client) => {
+wss.on('connection', (ws: Client, req: http.IncomingMessage) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   clients.add(ws);
+  try {
+    const u = new URL(req.url || '/ws', 'http://localhost');
+    const fromCursor = u.searchParams.get('fromCursor') || u.searchParams.get('cursor');
+    const normalized = (u.searchParams.get('normalized') || '0') === '1';
+    const rawLimit = Number(u.searchParams.get('limit') || 1000);
+    const limit = Math.max(1, Math.min(MAX_LIMIT, Number.isFinite(rawLimit) ? rawLimit : 1000));
+    if (fromCursor) {
+      try {
+        const { events, nextCursor } = exportEventsSinceCursor(fromCursor, limit, normalized);
+        const payload = normalized ? { type: 'events', events, nextCursor } : { type: 'events', events: events.map((e: any) => ({ ...e, cursor: formatCursor(e.blockNumber, e.logIndex) })), nextCursor };
+        ws.send(JSON.stringify(payload));
+      } catch {}
+    }
+  } catch {}
   ws.send(JSON.stringify({ type: 'hello', lastCursor: lastBroadcastCursor }));
   ws.on('close', () => { clients.delete(ws); });
 });
