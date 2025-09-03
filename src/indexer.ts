@@ -13,6 +13,7 @@ const TOPICS0 = [
   id('PunkBidEntered(uint256,uint256,address)'),
   id('PunkBidWithdrawn(uint256,uint256,address)'),
   id('PunkBought(uint256,uint256,address,address)'),
+  id('Transfer(address,address,uint256)'),
 ];
 const TOPIC_NAME = new Map([
   [id('Assign(address,uint256)'), 'Assign'],
@@ -22,6 +23,7 @@ const TOPIC_NAME = new Map([
   [id('PunkBidEntered(uint256,uint256,address)'), 'PunkBidEntered'],
   [id('PunkBidWithdrawn(uint256,uint256,address)'), 'PunkBidWithdrawn'],
   [id('PunkBought(uint256,uint256,address,address)'), 'PunkBought'],
+  [id('Transfer(address,address,uint256)'), 'Transfer'],
 ]);
 
 function hexToAddress(topic: string | null | undefined): string | null {
@@ -57,14 +59,14 @@ function parseLogCompat(log: Log): { name: string; args: any } | null {
   // Manual decoding fallback from topics + data
   if (name === 'Assign') {
     const to = hexToAddress(log.topics?.[1]);
-    const punkIndex = hexToBigInt(log.topics?.[2]);
+    const punkIndex = hexToBigInt(readWord(log.data, 0));
     if (to == null || punkIndex == null) return null;
     return { name, args: { to, punkIndex } };
   }
   if (name === 'PunkTransfer') {
     const from = hexToAddress(log.topics?.[1]);
     const to = hexToAddress(log.topics?.[2]);
-    const punkIndex = hexToBigInt(log.topics?.[3]);
+    const punkIndex = hexToBigInt(readWord(log.data, 0));
     if (from == null || to == null || punkIndex == null) return null;
     return { name, args: { from, to, punkIndex } };
   }
@@ -101,6 +103,10 @@ function parseLogCompat(log: Log): { name: string; args: any } | null {
     const toAddress = hexToAddress(log.topics?.[3]);
     if (punkIndex == null || value == null || fromAddress == null || toAddress == null) return null;
     return { name, args: { punkIndex, value, fromAddress, toAddress } };
+  }
+  if (name === 'Transfer') {
+    // Irrelevant ERC-20-style Transfer in this contract; skip
+    return null;
   }
   return null;
 }

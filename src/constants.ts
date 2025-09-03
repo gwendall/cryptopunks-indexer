@@ -3,7 +3,7 @@ export const CONTRACT_ADDRESS: string = "0xb47e3cd837ddf8e4c57f05d70ab865de6e193
 // Minimal ABI: events only (CryptoPunks is not ERC-721 compliant)
 export const PUNKS_ABI: readonly string[] = [
   // Assignment when a punk is initially claimed or assigned
-  "event Assign(address indexed to, uint256 indexed punkIndex)",
+  "event Assign(address indexed to, uint256 punkIndex)",
 
   // Transfer between addresses (no value in this event)
   "event PunkTransfer(address indexed from, address indexed to, uint256 indexed punkIndex)",
