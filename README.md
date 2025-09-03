@@ -88,6 +88,28 @@ Provider tips:
 - If you see range errors, you can also set `CHUNK_SIZE=10` explicitly for free-tier RPCs.
 - For fastest full sync: use a provider that allows larger log windows (e.g., Alchemy PAYG, QuickNode, Ankr, LlamaNodes) and set a larger `CHUNK_SIZE` (e.g., 2000–5000). Setting `SKIP_TIMESTAMPS=1` further reduces calls.
 
+On strong providers (e.g., Alchemy PAYG) you can often push the window much higher:
+
+- Many PAYG setups handle `CHUNK_SIZE=10000–20000`. The indexer will step down automatically if the provider responds with range/size errors.
+- Real‑world reference: full backfill completed in ~25 minutes with `CHUNK_SIZE=20000`, `FILTER_TOPICS=1`, `SKIP_TIMESTAMPS=1`.
+
+Exact commands on Alchemy PAYG:
+
+```bash
+# Fastest initial backfill (clears DB, skips timestamps)
+ETH_RPC_URL=<your-alchemy-https> \
+FILTER_TOPICS=1 SKIP_TIMESTAMPS=1 CHUNK_SIZE=20000 DEPLOY_BLOCK=3914495 \
+npm run sync -- --reset
+
+# If range/size errors occur, try a smaller window
+ETH_RPC_URL=<your-alchemy-https> \
+FILTER_TOPICS=1 SKIP_TIMESTAMPS=1 CHUNK_SIZE=5000 DEPLOY_BLOCK=3914495 \
+npm run sync -- --reset
+
+# After catch-up, keep it live (optionally add ETH_WS_URL=<wss>)
+TAIL=1 ETH_RPC_URL=<your-alchemy-https> FILTER_TOPICS=1 CHUNK_SIZE=10000 npm run sync
+```
+
 ## Speed & Cost Guide (RPCs & Alchemy)
 
 Expected durations depend heavily on the RPC provider and allowed `eth_getLogs` range.
@@ -102,7 +124,7 @@ Expected durations depend heavily on the RPC provider and allowed `eth_getLogs` 
   - Exact backfill command:
     ```bash
     ETH_RPC_URL=<your-alchemy-https> \
-    FILTER_TOPICS=1 SKIP_TIMESTAMPS=1 CHUNK_SIZE=5000 DEPLOY_BLOCK=3914495 \
+    FILTER_TOPICS=1 SKIP_TIMESTAMPS=1 CHUNK_SIZE=20000 DEPLOY_BLOCK=3914495 \
     npm run sync -- --reset
     ```
     If you see range/size errors, try `CHUNK_SIZE=2000`.
@@ -118,6 +140,20 @@ After backfill (tailing):
   TAIL=1 ETH_RPC_URL=<...> FILTER_TOPICS=1 CHUNK_SIZE=2000 npm run sync
   ```
   Optionally add WebSocket for near‑realtime triggers: `ETH_WS_URL=<your-wss>`.
+
+## Performance Tips
+
+- Bigger windows on strong RPCs: Start with `CHUNK_SIZE=20000` on Alchemy PAYG. If you see retries or slowdowns, reduce to `10000` or `5000`. The indexer auto‑adapts down on provider errors.
+- Reduce payload: Set `FILTER_TOPICS=1` to request only tracked event topics.
+- Skip timestamps for speed: `SKIP_TIMESTAMPS=1` avoids extra `getBlock` calls during backfill.
+- Keep logs quiet: Avoid `--verbose` during catch‑up; it adds I/O overhead.
+- Don’t tail while catching up: Run without `TAIL` until you’re near latest; then enable `TAIL=1`.
+- Storage: Keep `data/` on a fast local disk for better write throughput (SQLite WAL mode is enabled by default).
+- Region: Using an RPC in a nearby region can reduce latency across many requests.
+
+Timestamps note:
+
+- If you backfilled with `SKIP_TIMESTAMPS=1`, historical rows will have `block_timestamp = null`. If you need timestamps on all rows, the current approach is to re‑sync from scratch with `SKIP_TIMESTAMPS=0`. If you prefer a lightweight timestamp backfill (no re‑ingest of logs), open an issue — it’s straightforward to add a helper that fills timestamps by unique block numbers.
 
 How to find the deploy block manually:
 - Go to the contract on Etherscan: https://etherscan.io/address/0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb
