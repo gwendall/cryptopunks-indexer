@@ -45,6 +45,8 @@ try { progress.deployBlock = getDeployBlock(); } catch {}
 
 let lastBroadcastCursor = formatCursor(progress.lastSynced || 0, -1);
 const sseClients = new Set<{ write: (event: string, payload: any) => void }>();
+const progressSseClients = new Set<{ write: (event: string, payload: any) => void }>();
+let lastProgressUpdateAt: number | null = null;
 
 async function updateLatest() {
   try { progress.latest = await provider.getBlockNumber(); }
@@ -238,6 +240,31 @@ const server = http.createServer(async (req, res) => {
       send(200, { offers, bids, floor });
       return;
     }
+    if (path === '/v1/stream/progress') {
+      const headers: Record<string, string> = {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        'connection': 'keep-alive',
+        'x-accel-buffering': 'no',
+      };
+      res.writeHead(200, headers);
+      const write = (event: string, payload: any) => {
+        try {
+          res.write(`event: ${event}\n`);
+          res.write(`data: ${JSON.stringify(payload)}\n\n`);
+        } catch {}
+      };
+      // Send initial snapshot
+      try {
+        const rt = getRuntimeProgress();
+        write('progress', rt);
+      } catch {}
+      const client = { write };
+      progressSseClients.add(client);
+      const ka = setInterval(() => { try { res.write(`:ka\n\n`); } catch {} }, 15000);
+      req.on('close', () => { clearInterval(ka); progressSseClients.delete(client); try { res.end(); } catch {} });
+      return;
+    }
     if (path === '/v1/events' || path === '/v1/events/normalized') {
       const rawLimit = Number(query.limit || 1000);
       const limit = Math.max(1, Math.min(MAX_LIMIT, Number.isFinite(rawLimit) ? rawLimit : 1000));
@@ -359,6 +386,21 @@ function broadcast(payload: any) {
     try { c.write('events', payload); } catch {}
   }
 }
+
+// Periodically broadcast progress updates via SSE when it changes
+setInterval(() => {
+  try {
+    if (progressSseClients.size === 0) return;
+    const rt = getRuntimeProgress();
+    const ts = Number(rt.updatedAt || 0);
+    if (!Number.isFinite(ts)) return;
+    if (lastProgressUpdateAt != null && ts <= lastProgressUpdateAt) return;
+    lastProgressUpdateAt = ts;
+    for (const c of progressSseClients) {
+      try { c.write('progress', rt); } catch {}
+    }
+  } catch {}
+}, 1000);
 
 // Tailing loop: initial sync + keep-up
 let syncing = false;

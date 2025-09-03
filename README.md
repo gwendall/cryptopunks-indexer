@@ -141,6 +141,7 @@ Base URL: `http://localhost:8080`
   - Returns: `{ events: [...], nextCursor, hasMore, limit, offset, maxLimit }` and headers `X-Next-Cursor`, `X-Has-More`, `X-Limit`, `X-Offset`, `X-Max-Limit`.
 - `GET /v1/events/normalized` — same filters as `/v1/events`, returns normalized event schema for apps
 - WebSocket: `ws://localhost:8080/ws` — pushes `{ type: 'events', events: [...] }` after each sync batch
+- SSE: `/v1/stream/progress` — live runtime sync progress updates (event: `progress` with the same fields as `runtime` in `/v1/progress`)
 
 Realtime options (SSE vs WebSocket)
 - SSE (`/v1/stream/events`) is the simplest: HTTP-friendly, works behind CDNs/reverse proxies, auto-reconnect is trivial. Great for one-way streams from server → client.
