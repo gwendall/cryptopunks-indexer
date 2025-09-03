@@ -5,6 +5,7 @@ import zlib from 'node:zlib';
 import { WebSocketServer } from 'ws';
 import { JsonRpcProvider } from 'ethers';
 import { exportOwners, exportActiveOffers, exportActiveBids, exportFloor, exportEventsSinceCursor, exportEventsFiltered, formatCursor, parseCursor, getLastSyncedBlock } from './indexer.js';
+import { buildOpenApiSpec } from './openapi.js';
 import { runSync } from './indexer.js';
 
 type Progress = {
@@ -96,6 +97,57 @@ const server = http.createServer(async (req, res) => {
   const notFound = () => send(404, { error: 'not_found' });
 
   try {
+    if (path === '/' || path === '/docs') {
+      // Swagger UI via CDN
+      const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CryptoPunks Indexer API</title>
+    <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css" />
+    <style> body { margin: 0; } #swagger-ui { max-width: 100%; } </style>
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+      window.ui = SwaggerUIBundle({
+        url: '/openapi.json',
+        dom_id: '#swagger-ui',
+        presets: [SwaggerUIBundle.presets.apis],
+        layout: 'BaseLayout'
+      });
+    </script>
+  </body>
+</html>`;
+      const buf = Buffer.from(html);
+      const ae = String(req.headers['accept-encoding'] || '');
+      const useBr = !DISABLE_COMPRESSION && ae.includes('br') && typeof zlib.brotliCompress === 'function';
+      const useGz = !DISABLE_COMPRESSION && !useBr && ae.includes('gzip');
+      if (useBr) {
+        zlib.brotliCompress(buf, (err, out) => {
+          if (err) { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(buf); return; }
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-encoding': 'br', 'vary': 'Accept-Encoding', 'content-length': out.length });
+          res.end(out);
+        });
+      } else if (useGz) {
+        zlib.gzip(buf, (err, out) => {
+          if (err) { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end(buf); return; }
+          res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-encoding': 'gzip', 'vary': 'Accept-Encoding', 'content-length': out.length });
+          res.end(out);
+        });
+      } else {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-length': buf.length, 'vary': 'Accept-Encoding' });
+        res.end(buf);
+      }
+      return;
+    }
+    if (path === '/openapi.json') {
+      const spec = buildOpenApiSpec('');
+      send(200, spec);
+      return;
+    }
     if (path === '/' || path === '/v1/health') {
       await updateLatest();
       send(200, { ok: true, latest: progress.latest, lastSynced: progress.lastSynced, behind: progress.behind });
