@@ -139,8 +139,12 @@ What it runs:
 
 ## API (built‑in server)
 
-Base URL: `http://localhost:8080`
-- Demo: `https://api.punks.art` (e.g., `/docs`, `/progress`, `/v1/progress`, `/v1/events`)
+Base URL: [http://localhost:8080](http://localhost:8080)
+- Demo: [https://api.punks.art](https://api.punks.art)
+  - Docs: https://api.punks.art/docs
+  - Progress: https://api.punks.art/progress
+  - Progress (JSON): https://api.punks.art/v1/progress
+  - Events: https://api.punks.art/v1/events
 
 - `GET /v1/health` — `{ ok, latest, lastSynced, behind }`
 - `GET /v1/progress` — full sync progress (deploy, lastSynced, latest, behind, last run timings)
