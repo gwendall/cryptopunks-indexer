@@ -88,6 +88,37 @@ Provider tips:
 - If you see range errors, you can also set `CHUNK_SIZE=10` explicitly for free-tier RPCs.
 - For fastest full sync: use a provider that allows larger log windows (e.g., Alchemy PAYG, QuickNode, Ankr, LlamaNodes) and set a larger `CHUNK_SIZE` (e.g., 2000–5000). Setting `SKIP_TIMESTAMPS=1` further reduces calls.
 
+## Speed & Cost Guide (RPCs & Alchemy)
+
+Expected durations depend heavily on the RPC provider and allowed `eth_getLogs` range.
+
+- Free-tier RPCs:
+  - Many restrict `eth_getLogs` to ~10 blocks (e.g., Alchemy Free).
+  - Expect 1–3 days (or more) to backfill the full chain.
+  - Settings: `FILTER_TOPICS=1`, `SKIP_TIMESTAMPS=1`, `CHUNK_SIZE=10–100` (reduce retries), no `--verbose`.
+
+- Alchemy Pay-As-You-Go (no monthly fee):
+  - Steps: Upgrade to PAYG → Create Core API app → copy HTTPS endpoint.
+  - Exact backfill command:
+    ```bash
+    ETH_RPC_URL=<your-alchemy-https> \
+    FILTER_TOPICS=1 SKIP_TIMESTAMPS=1 CHUNK_SIZE=5000 DEPLOY_BLOCK=3914495 \
+    npm run sync -- --reset
+    ```
+    If you see range/size errors, try `CHUNK_SIZE=2000`.
+  - Typical time: roughly 6–14 hours for full backfill (2–5x faster than free-tier). Actual speed varies by network and provider load.
+  - Cost estimate: ~$2–$15 total for the initial backfill (PAYG billed at ~$0.45 per 1M CUs). Keep `FILTER_TOPICS=1` and `SKIP_TIMESTAMPS=1` to minimize compute units. Monitor usage on the Alchemy dashboard and stop anytime.
+
+- Local node (Erigon):
+  - Fastest and most consistent. Expect ~15–45 minutes with `CHUNK_SIZE=5000`, `FILTER_TOPICS=1`, `SKIP_TIMESTAMPS=1`.
+
+After backfill (tailing):
+- Keep indexing new blocks with:
+  ```bash
+  TAIL=1 ETH_RPC_URL=<...> FILTER_TOPICS=1 CHUNK_SIZE=2000 npm run sync
+  ```
+  Optionally add WebSocket for near‑realtime triggers: `ETH_WS_URL=<your-wss>`.
+
 How to find the deploy block manually:
 - Go to the contract on Etherscan: https://etherscan.io/address/0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb
 - In the “Transactions” tab, open the “Contract Creation” transaction and note the Block number.
