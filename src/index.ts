@@ -2,7 +2,7 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketProvider } from 'ethers';
-import { runSync, exportOwners, exportOperationsGrouped, exportEventsUnified, exportEventsNormalized, exportActiveOffers, exportActiveBids, exportFloor } from './indexer.js';
+import { runSync, backfillTimestamps, exportOwners, exportOperationsGrouped, exportEventsUnified, exportEventsNormalized, exportActiveOffers, exportActiveBids, exportFloor } from './indexer.js';
 
 async function main() {
   const cmd = process.argv[2] || 'sync';
@@ -79,6 +79,8 @@ async function main() {
       // eslint-disable-next-line no-constant-condition
       while (true) { await sleep(3600_000); }
     }
+  } else if (cmd === 'backfill-ts' || cmd === 'backfill-timestamps') {
+    await backfillTimestamps();
   } else if (cmd === 'export') {
     const argv = process.argv.slice(3);
     const onlyOwners = argv.includes('--owners');

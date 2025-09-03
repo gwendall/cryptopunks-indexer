@@ -10,6 +10,8 @@ export function openDb(): any {
   const db = new Database(DB_PATH);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
+  // Wait for up to 5 seconds if another process holds a write lock
+  db.pragma("busy_timeout = 5000");
   migrate(db);
   return db;
 }

@@ -448,6 +448,116 @@ export async function runSync(): Promise<void> {
   console.log(`Parsed events: ${totalParsed}${types ? ' [' + types + ']' : ''}`);
 }
 
+export async function backfillTimestamps(): Promise<{ blocks: number; updated: number }> {
+  const { rpcUrl } = getConfig();
+  const db = openDb();
+
+  const tables = [
+    'raw_logs',
+    'assigns',
+    'transfers',
+    'offers',
+    'offer_cancellations',
+    'bids',
+    'bid_withdrawals',
+    'buys',
+  ];
+
+  const missing = new Set<number>();
+  for (const t of tables) {
+    const rows = db.prepare(`SELECT DISTINCT block_number AS bn FROM ${t} WHERE block_timestamp IS NULL`).all();
+    for (const r of rows) missing.add(Number(r.bn));
+  }
+
+  const blockNumbers = Array.from(missing).sort((a, b) => a - b);
+  if (blockNumbers.length === 0) {
+    console.log('Timestamp backfill: nothing to do.');
+    return { blocks: 0, updated: 0 };
+  }
+
+  const batchSize = Number(process.env.TS_BACKFILL_BATCH || 1000); // db update batch size
+  const rpcBatchSize = Number(process.env.TS_BACKFILL_RPC_BATCH || 50); // JSON-RPC array size per HTTP call
+  const rpcConcurrency = Number(process.env.TS_BACKFILL_CONCURRENCY || 8); // parallel HTTP calls
+
+  let updated = 0;
+  let processedBlocks = 0;
+  const t0 = Date.now();
+
+  function fmt(n: number) {
+    if (n < 1000) return String(n);
+    if (n < 1e6) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+    return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  }
+
+  function toHex(bn: number) { return '0x' + bn.toString(16); }
+
+  async function fetchTimestampsRPC(bns: number[]): Promise<Map<number, number>> {
+    const out = new Map<number, number>();
+    // Chunk into JSON-RPC batches and fetch with limited concurrency
+    const chunks: number[][] = [];
+    for (let i = 0; i < bns.length; i += rpcBatchSize) chunks.push(bns.slice(i, i + rpcBatchSize));
+    let idx = 0;
+    const runOne = async () => {
+      while (idx < chunks.length) {
+        const my = idx++;
+        const blocks = chunks[my];
+        const batch = blocks.map((bn, i) => ({
+          jsonrpc: '2.0', id: `${my}:${i}`, method: 'eth_getBlockByNumber', params: [toHex(bn), false]
+        }));
+        try {
+          const res = await fetch(rpcUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(batch) });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const arr = await res.json();
+          if (Array.isArray(arr)) {
+            for (const item of arr) {
+              const r = item?.result;
+              if (r?.number && r?.timestamp) {
+                const bn = parseInt(String(r.number), 16);
+                const ts = parseInt(String(r.timestamp), 16);
+                if (Number.isFinite(bn) && Number.isFinite(ts)) out.set(bn, ts);
+              }
+            }
+          }
+        } catch {
+          // Fallback per-block via provider if batch failed
+          for (const bn of blocks) {
+            try {
+              const res = await fetch(rpcUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_getBlockByNumber', params: [toHex(bn), false] }) });
+              const j = await res.json();
+              const r = j?.result;
+              if (r?.timestamp) out.set(bn, parseInt(String(r.timestamp), 16));
+            } catch {}
+          }
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(rpcConcurrency, chunks.length) }, runOne));
+    return out;
+  }
+
+  for (let i = 0; i < blockNumbers.length; i += batchSize) {
+    const slice = blockNumbers.slice(i, i + batchSize);
+    const tsMap = await fetchTimestampsRPC(slice);
+
+    const tx = db.transaction(() => {
+      for (const [bn, ts] of tsMap.entries()) {
+        for (const t of tables) {
+          updated += db.prepare(`UPDATE ${t} SET block_timestamp = ? WHERE block_timestamp IS NULL AND block_number = ?`).run(ts, bn).changes || 0;
+        }
+      }
+    });
+    tx();
+
+    processedBlocks += slice.length;
+    const dt = (Date.now() - t0) / 1000;
+    const rate = dt > 0 ? processedBlocks / dt : 0;
+    process.stdout.write(`\rBackfill timestamps: ${fmt(processedBlocks)}/${fmt(blockNumbers.length)} blocks | ${rate.toFixed(0)} blk/s`);
+  }
+  process.stdout.write('\n');
+  console.log(`Updated rows: ${fmt(updated)}`);
+  return { blocks: blockNumbers.length, updated };
+}
+
 export function exportOwners() {
   const db = openDb();
   const rows = db.prepare(`SELECT punk_index, owner FROM owners ORDER BY punk_index`).all();

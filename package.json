@@ -10,6 +10,7 @@
     "export": "tsx src/index.ts export",
     "export:ops": "tsx src/index.ts export-ops",
     "export:events": "tsx src/index.ts export-events",
+    "backfill:timestamps": "tsx src/index.ts backfill-ts",
     "type-check": "tsc --noEmit",
     "docker:up": "docker compose up -d",
     "docker:logs": "docker compose logs -f",
