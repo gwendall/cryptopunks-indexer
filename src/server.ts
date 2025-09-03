@@ -18,6 +18,7 @@ type Progress = {
 };
 
 const PORT = Number(process.env.PORT || 8080);
+const MAX_LIMIT = Math.max(100, Math.min(5000, Number(process.env.MAX_LIMIT || 5000)));
 const ETH_RPC_URL = process.env.ETH_RPC_URL;
 if (!ETH_RPC_URL) {
   console.error('ETH_RPC_URL is required');
@@ -149,7 +150,10 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (path === '/v1/events' || path === '/v1/events/normalized') {
-      const limit = Math.max(1, Math.min(5000, Number(query.limit || 1000)));
+      const rawLimit = Number(query.limit || 1000);
+      const limit = Math.max(1, Math.min(MAX_LIMIT, Number.isFinite(rawLimit) ? rawLimit : 1000));
+      const rawOffset = Number(query.offset || 0);
+      const offset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
       const normalized = path.endsWith('/normalized') || query.normalized === '1' || query.normalized === 'true';
       const fromCursor = (query.fromCursor as string) || (query.cursor as string) || undefined;
       const fromBlock = query.fromBlock != null ? Number(query.fromBlock) : undefined;
@@ -157,8 +161,24 @@ const server = http.createServer(async (req, res) => {
       const types = (query.types as string | undefined)?.split(',').map(s => s.trim()).filter(Boolean);
       const punkIndices = (query.punk as string | undefined)?.split(',').map(s => Number(s)).filter(n => Number.isFinite(n));
       const address = (query.address as string | undefined) || undefined;
-      const { events, nextCursor } = exportEventsFiltered({ cursor: fromCursor, fromBlock, toBlock, types: types?.length ? types : undefined, punkIndices: punkIndices?.length ? punkIndices : undefined, address, limit, normalized });
-      send(200, { events, nextCursor });
+      // Date/time filters (seconds or ISO)
+      function parseTime(x: any): number | undefined {
+        if (x == null) return undefined;
+        const s = String(x);
+        if (!s) return undefined;
+        if (/^\d+$/.test(s)) return Number(s);
+        const ms = Date.parse(s);
+        return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined;
+      }
+      const fromTimestamp = parseTime((query.fromTs as string) || (query.fromTime as string) || (query.fromDate as string));
+      const toTimestamp = parseTime((query.toTs as string) || (query.toTime as string) || (query.toDate as string));
+      const { events, nextCursor, hasMore } = exportEventsFiltered({ cursor: fromCursor, fromBlock, toBlock, fromTimestamp, toTimestamp, types: types?.length ? types : undefined, punkIndices: punkIndices?.length ? punkIndices : undefined, address, limit, offset, normalized });
+      res.setHeader('X-Next-Cursor', nextCursor);
+      res.setHeader('X-Has-More', hasMore ? '1' : '0');
+      res.setHeader('X-Limit', String(limit));
+      res.setHeader('X-Offset', String(offset));
+      res.setHeader('X-Max-Limit', String(MAX_LIMIT));
+      send(200, { events, nextCursor, hasMore, limit, offset, maxLimit: MAX_LIMIT });
       return;
     }
     if (path?.startsWith('/v1/punks/')) {
@@ -177,14 +197,27 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (parts[4] === 'events') {
-        const limit = Math.max(1, Math.min(5000, Number(query.limit || 1000)));
+        const rawLimit = Number(query.limit || 1000);
+        const limit = Math.max(1, Math.min(MAX_LIMIT, Number.isFinite(rawLimit) ? rawLimit : 1000));
+        const rawOffset = Number(query.offset || 0);
+        const offset = Math.max(0, Number.isFinite(rawOffset) ? rawOffset : 0);
         const normalized = query.normalized === '1' || query.normalized === 'true';
         const fromCursor = (query.fromCursor as string) || (query.cursor as string) || undefined;
         const fromBlock = query.fromBlock != null ? Number(query.fromBlock) : undefined;
         const toBlock = query.toBlock != null ? Number(query.toBlock) : undefined;
         const types = (query.types as string | undefined)?.split(',').map(s => s.trim()).filter(Boolean);
-        const { events, nextCursor } = exportEventsFiltered({ cursor: fromCursor, fromBlock, toBlock, types: types?.length ? types : undefined, punkIndices: [id], limit, normalized });
-        send(200, { events, nextCursor });
+        function parseTime(x: any): number | undefined {
+          if (x == null) return undefined; const s = String(x); if (!s) return undefined; if (/^\d+$/.test(s)) return Number(s); const ms = Date.parse(s); return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined;
+        }
+        const fromTimestamp = parseTime((query.fromTs as string) || (query.fromTime as string) || (query.fromDate as string));
+        const toTimestamp = parseTime((query.toTs as string) || (query.toTime as string) || (query.toDate as string));
+        const { events, nextCursor, hasMore } = exportEventsFiltered({ cursor: fromCursor, fromBlock, toBlock, fromTimestamp, toTimestamp, types: types?.length ? types : undefined, punkIndices: [id], limit, offset, normalized });
+        res.setHeader('X-Next-Cursor', nextCursor);
+        res.setHeader('X-Has-More', hasMore ? '1' : '0');
+        res.setHeader('X-Limit', String(limit));
+        res.setHeader('X-Offset', String(offset));
+        res.setHeader('X-Max-Limit', String(MAX_LIMIT));
+        send(200, { events, nextCursor, hasMore, limit, offset, maxLimit: MAX_LIMIT });
         return;
       }
       send(404, { error: 'not_found' });

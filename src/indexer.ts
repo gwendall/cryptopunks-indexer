@@ -814,6 +814,9 @@ export type EventFilter = {
   punkIndices?: number[] | null;
   address?: string | null; // matches any relevant address field
   limit?: number;
+  offset?: number;
+  fromTimestamp?: number | null; // seconds
+  toTimestamp?: number | null;   // seconds
   normalized?: boolean;
 };
 
@@ -822,6 +825,7 @@ const ALL_EVENT_TYPES = ['Assign','PunkTransfer','PunkOffered','PunkNoLongerForS
 export function exportEventsFiltered(filter: EventFilter) {
   const db = openDb();
   const limit = Math.max(1, Math.min(5000, Number(filter.limit ?? 1000)));
+  const offset = Math.max(0, Number(filter.offset ?? 0));
   const { bn, li } = parseCursor(filter.cursor ?? null);
 
   const selected = (filter.types && filter.types.length)
@@ -836,6 +840,8 @@ export function exportEventsFiltered(filter: EventFilter) {
   if (bn >= 0) { baseWhereParts.push('(block_number > ? OR (block_number = ? AND log_index > ?))'); baseParams.push(bn, bn, li); }
   if (filter.fromBlock != null) { baseWhereParts.push('block_number >= ?'); baseParams.push(filter.fromBlock); }
   if (filter.toBlock != null) { baseWhereParts.push('block_number <= ?'); baseParams.push(filter.toBlock); }
+  if (filter.fromTimestamp != null) { baseWhereParts.push('block_timestamp IS NOT NULL AND block_timestamp >= ?'); baseParams.push(filter.fromTimestamp); }
+  if (filter.toTimestamp != null) { baseWhereParts.push('block_timestamp IS NOT NULL AND block_timestamp <= ?'); baseParams.push(filter.toTimestamp); }
   if (punkList) {
     baseWhereParts.push(`punk_index IN (${punkList.map(() => '?').join(',')})`);
     baseParams.push(...punkList);
@@ -876,10 +882,11 @@ export function exportEventsFiltered(filter: EventFilter) {
 
   outRows.sort((a, b) => (a.blockNumber - b.blockNumber) || (a.logIndex - b.logIndex));
   let rows = outRows;
-  if (rows.length > limit) rows = rows.slice(0, limit);
+  const hasMore = rows.length > (offset + limit);
+  if (offset > 0 || rows.length > limit) rows = rows.slice(offset, offset + limit);
   const nextCursor = rows.length ? formatCursor(rows[rows.length - 1].blockNumber, rows[rows.length - 1].logIndex) : formatCursor(bn, li);
 
-  if (!filter.normalized) return { events: rows.map(e => ({ ...e })), nextCursor };
+  if (!filter.normalized) return { events: rows.map(e => ({ ...e })), nextCursor, hasMore };
 
   const mapped = rows.map((e) => {
     let type;
@@ -907,7 +914,7 @@ export function exportEventsFiltered(filter: EventFilter) {
       cursor: formatCursor(e.blockNumber, e.logIndex),
     };
   });
-  return { events: mapped, nextCursor };
+  return { events: mapped, nextCursor, hasMore };
 }
 
 export function exportActiveOffers(limit = null) {
