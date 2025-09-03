@@ -118,6 +118,41 @@ function migrate(db: any) {
       punk_index INTEGER PRIMARY KEY,
       owner TEXT NOT NULL
     );
+
+    -- Indexes for fast API filtering/sorting
+    CREATE INDEX IF NOT EXISTS idx_raw_logs_blk_log ON raw_logs(block_number, log_index);
+
+    CREATE INDEX IF NOT EXISTS idx_assigns_blk_log ON assigns(block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_assigns_punk_blk_log ON assigns(punk_index, block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_assigns_to ON assigns(to_address);
+
+    CREATE INDEX IF NOT EXISTS idx_transfers_blk_log ON transfers(block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_transfers_punk_blk_log ON transfers(punk_index, block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_transfers_from ON transfers(from_address);
+    CREATE INDEX IF NOT EXISTS idx_transfers_to ON transfers(to_address);
+
+    CREATE INDEX IF NOT EXISTS idx_offers_blk_log ON offers(block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_offers_punk_blk_log ON offers(punk_index, block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_offers_to ON offers(to_address);
+    CREATE INDEX IF NOT EXISTS idx_offers_active ON offers(active);
+
+    CREATE INDEX IF NOT EXISTS idx_offer_cancel_blk_log ON offer_cancellations(block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_offer_cancel_punk_blk_log ON offer_cancellations(punk_index, block_number, log_index);
+
+    CREATE INDEX IF NOT EXISTS idx_bids_blk_log ON bids(block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_bids_punk_blk_log ON bids(punk_index, block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_bids_from ON bids(from_address);
+    CREATE INDEX IF NOT EXISTS idx_bids_active ON bids(active);
+
+    CREATE INDEX IF NOT EXISTS idx_bid_withdraw_blk_log ON bid_withdrawals(block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_bid_withdraw_punk_blk_log ON bid_withdrawals(punk_index, block_number, log_index);
+
+    CREATE INDEX IF NOT EXISTS idx_buys_blk_log ON buys(block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_buys_punk_blk_log ON buys(punk_index, block_number, log_index);
+    CREATE INDEX IF NOT EXISTS idx_buys_from ON buys(from_address);
+    CREATE INDEX IF NOT EXISTS idx_buys_to ON buys(to_address);
+
+    CREATE INDEX IF NOT EXISTS idx_owners_owner ON owners(owner);
   `);
 }
 

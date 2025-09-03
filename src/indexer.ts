@@ -639,6 +639,13 @@ export function exportOwners() {
   return out;
 }
 
+export function exportPunksByOwner(address: string): number[] {
+  const db = openDb();
+  const addr = String(address).toLowerCase();
+  const rows = db.prepare(`SELECT punk_index AS punkIndex FROM owners WHERE owner = ? ORDER BY punk_index`).all(addr);
+  return rows.map((r: any) => Number(r.punkIndex));
+}
+
 export function exportOperationsGrouped(punkIndex = null) {
   const db = openDb();
   const where = punkIndex == null ? '' : 'WHERE punk_index = ?';
@@ -857,14 +864,14 @@ export function exportEventsFiltered(filter: EventFilter) {
     const whereParts = baseWhereParts.slice();
     const params = baseParams.slice();
     if (addr) {
-      if (t === 'Assign') whereParts.push('LOWER(to_address) = ?');
-      else if (t === 'PunkTransfer') whereParts.push('(LOWER(from_address) = ? OR LOWER(to_address) = ?)');
-      else if (t === 'PunkOffered') whereParts.push('LOWER(IFNULL(to_address, "")) = ?');
+      if (t === 'Assign') whereParts.push('to_address = ?');
+      else if (t === 'PunkTransfer') whereParts.push('(from_address = ? OR to_address = ?)');
+      else if (t === 'PunkOffered') whereParts.push('to_address = ?');
       else if (t === 'PunkNoLongerForSale') {
         // no address in table; skip address filter → no results for this type when filtering by address
         continue;
-      } else if (t === 'PunkBidEntered' || t === 'PunkBidWithdrawn') whereParts.push('LOWER(from_address) = ?');
-      else if (t === 'PunkBought') whereParts.push('(LOWER(from_address) = ? OR LOWER(to_address) = ?)');
+      } else if (t === 'PunkBidEntered' || t === 'PunkBidWithdrawn') whereParts.push('from_address = ?');
+      else if (t === 'PunkBought') whereParts.push('(from_address = ? OR to_address = ?)');
       // push addr param(s)
       if (t === 'PunkTransfer' || t === 'PunkBought') { params.push(addr, addr); }
       else if (t === 'Assign' || t === 'PunkOffered' || t === 'PunkBidEntered' || t === 'PunkBidWithdrawn') { params.push(addr); }

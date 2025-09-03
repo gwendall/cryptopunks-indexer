@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { JsonRpcProvider } from 'ethers';
-import { exportOwners, exportActiveOffers, exportActiveBids, exportFloor, exportEventsSinceCursor, exportEventsFiltered, formatCursor, parseCursor, getLastSyncedBlock } from './indexer.js';
+import { exportOwners, exportPunksByOwner, exportActiveOffers, exportActiveBids, exportFloor, exportEventsSinceCursor, exportEventsFiltered, formatCursor, parseCursor, getLastSyncedBlock } from './indexer.js';
 import { buildOpenApiSpec } from './openapi.js';
 import { runSync } from './indexer.js';
 
@@ -289,8 +289,7 @@ const server = http.createServer(async (req, res) => {
     if (path?.startsWith('/v1/owners/')) {
       const addr = (path.split('/')[3] || '').toLowerCase();
       if (!addr || !addr.startsWith('0x') || addr.length !== 42) { send(400, { error: 'bad_address' }); return; }
-      const owners = exportOwners();
-      const punks = Object.entries(owners).filter(([_, v]) => String(v).toLowerCase() === addr).map(([k]) => Number(k)).sort((a,b)=>a-b);
+      const punks = exportPunksByOwner(addr);
       send(200, { owner: addr, punkIndices: punks });
       return;
     }
