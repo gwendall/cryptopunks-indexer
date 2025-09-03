@@ -13,7 +13,6 @@ const TOPICS0 = [
   id('PunkBidEntered(uint256,uint256,address)'),
   id('PunkBidWithdrawn(uint256,uint256,address)'),
   id('PunkBought(uint256,uint256,address,address)'),
-  id('Transfer(address,address,uint256)'),
 ];
 const TOPIC_NAME = new Map([
   [id('Assign(address,uint256)'), 'Assign'],
@@ -23,7 +22,6 @@ const TOPIC_NAME = new Map([
   [id('PunkBidEntered(uint256,uint256,address)'), 'PunkBidEntered'],
   [id('PunkBidWithdrawn(uint256,uint256,address)'), 'PunkBidWithdrawn'],
   [id('PunkBought(uint256,uint256,address,address)'), 'PunkBought'],
-  [id('Transfer(address,address,uint256)'), 'Transfer'],
 ]);
 
 function hexToAddress(topic: string | null | undefined): string | null {
@@ -357,7 +355,9 @@ export async function runSync(): Promise<void> {
         if (!parsed) {
           const t0 = log.topics?.[0];
           const pname = t0 ? (TOPIC_NAME.get(t0) || 'UnknownTopic') : 'NoTopic0';
-          console.warn(`Warning: failed to parse ${pname} @${log.blockNumber}:${log.index} tx=${log.transactionHash}`);
+          if (pname !== 'Transfer') {
+            console.warn(`Warning: failed to parse ${pname} @${log.blockNumber}:${log.index} tx=${log.transactionHash}`);
+          }
           continue;
         }
         const name: string = parsed.name;
