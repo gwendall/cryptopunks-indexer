@@ -1,4 +1,4 @@
-# CryptoPunks Standalone Indexer
+# The CryptoPunks Indexer
 
 Indexes on‑chain CryptoPunks activity into a local SQLite database and exports clean, ready‑to‑use JSON.
 
