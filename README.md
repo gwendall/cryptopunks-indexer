@@ -181,6 +181,9 @@ npm run sync -- --reset
 - `npm run export:ops`: Export grouped operations to `data/operations_by_type.json`.
 - `npm run export:events`: Export unified timeline to `data/events.json`.
 - `node --import tsx src/index.ts verify` or `tsx src/index.ts verify`: Quick DB sanity check (counts per table, deploy and last synced blocks).
+- `npm run backfill:timestamps`: Fill `block_timestamp` on historical rows after a fast backfill that used `SKIP_TIMESTAMPS=1`.
+  - Tip: Run this when the indexer is NOT writing (no `TAIL=1`) to avoid SQLite busy locks.
+  - Tuning envs: `TS_BACKFILL_BATCH=2000` (DB update batch), `TS_BACKFILL_RPC_BATCH=100` (JSON-RPC batch size), `TS_BACKFILL_CONCURRENCY=8–16`.
 
 ## Data Outputs
 
