@@ -546,7 +546,24 @@ export async function backfillTimestamps(): Promise<{ blocks: number; updated: n
         }
       }
     });
-    tx();
+    // retry on SQLITE_BUSY (another process writing); obey busy_timeout first
+    let done = false;
+    let attempts = 0;
+    const maxAttempts = Number(process.env.TS_BACKFILL_RETRIES || 10);
+    while (!done) {
+      try {
+        tx();
+        done = true;
+      } catch (e: any) {
+        if (e?.code === 'SQLITE_BUSY' && attempts < maxAttempts) {
+          attempts++;
+          const delay = Math.min(5000, 100 * Math.pow(2, attempts));
+          await sleep(delay);
+          continue;
+        }
+        throw e;
+      }
+    }
 
     processedBlocks += slice.length;
     const dt = (Date.now() - t0) / 1000;

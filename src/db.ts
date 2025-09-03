@@ -11,7 +11,7 @@ export function openDb(): any {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
   // Wait for up to 5 seconds if another process holds a write lock
-  db.pragma("busy_timeout = 5000");
+  db.pragma("busy_timeout = 30000");
   migrate(db);
   return db;
 }
