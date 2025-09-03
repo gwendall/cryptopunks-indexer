@@ -84,6 +84,7 @@ Stops with `docker compose down`. Data persists in `./data`.
 - `FILTER_TOPICS` (optional): `1` to request only the tracked event topics (smaller responses; some providers behave better). Default: `0`.
 - `PORT` (optional): HTTP port for the built-in server. Default: `8080`.
 - `DISABLE_COMPRESSION` (optional): `1` to disable gzip/brotli compression on API responses.
+- `MAX_LIMIT` (optional): Maximum items per page for events endpoints. Default: `5000` (min cap of 100).
 
 ## API (built‑in server)
 
@@ -98,13 +99,15 @@ Base URL: `http://localhost:8080`
 - `GET /v1/punks/:id/events` — same as `/v1/events` scoped to one punk
 - `GET /v1/events` — unified events with pagination and filters
   - Query params:
-    - `limit` (int, 1–5000; default 1000)
+    - `limit` (int, 1–MAX_LIMIT; default 1000)
+    - `offset` (int, default 0) — alternative to cursor paging; applied after sorting
     - `fromCursor` or `cursor` (string `block:log`), for forward paging
     - `fromBlock`, `toBlock` (ints)
+    - `fromTs`/`toTs` (unix seconds) or `fromDate`/`toDate` (ISO)
     - `types` (CSV of `Assign,PunkTransfer,PunkOffered,PunkNoLongerForSale,PunkBidEntered,PunkBidWithdrawn,PunkBought`)
     - `punk` (CSV of punk indices)
     - `address` (match relevant address fields for each type)
-  - Returns: `{ events: [...], nextCursor }`
+  - Returns: `{ events: [...], nextCursor, hasMore, limit, offset, maxLimit }` and headers `X-Next-Cursor`, `X-Has-More`, `X-Limit`, `X-Offset`, `X-Max-Limit`.
 - `GET /v1/events/normalized` — same filters as `/v1/events`, returns normalized event schema for apps
 - WebSocket: `ws://localhost:8080/ws` — pushes `{ type: 'events', events: [...] }` after each sync batch
 
