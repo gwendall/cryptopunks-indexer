@@ -159,7 +159,7 @@ const server = http.createServer(async (req, res) => {
       }
       return;
     }
-    if (path === '/progress') {
+    if (path === '/progress' || path === '/progress/') {
       // Lightweight HTML dashboard for runtime progress
       const html = `<!doctype html>
 <html>
