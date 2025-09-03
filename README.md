@@ -26,9 +26,9 @@ Indexes on‑chain CryptoPunks activity into a local SQLite database and exports
 2) Install and run:
 
 ```
-npm install   # or: pnpm install | yarn install
-pnpm start        # starts API server + sync (initial catch‑up, then realtime)
-pnpm run export   # writes data/owners.json
+npm install            # or: pnpm install | yarn install
+pnpm start             # starts API server + sync (foreground)
+pnpm run export        # writes data/owners.json
 ```
 
 Optional CLI-only sync (poll every 15s):
@@ -69,6 +69,36 @@ docker compose logs -f
 ```
 
 Stops with `docker compose down`. Data persists in `./data`.
+
+## Deploy on a Droplet (Idempotent)
+
+This repo includes an idempotent start-or-restart command for simple server management on a Linux host (e.g., DigitalOcean Droplet) without PM2 or systemd wiring.
+
+- One-time setup (on the Droplet):
+  - `git clone` or `git pull` your repo
+  - `cp .env.example .env` and set `ETH_RPC_URL`
+  - `pnpm install` (or `npm install` / `yarn install`)
+  - pnpm only: if you see a native binding warning, run `pnpm run fix:pnpm`
+
+- Start or restart the API server (idempotent):
+
+```
+pnpm run serve
+```
+
+What it does:
+- Stops any existing instance (PID file or port check)
+- Starts a new detached server process on `:8080` (configurable via `PORT`)
+- Logs to `data/server.log`
+
+Useful commands:
+- Stop: `pnpm run stop`
+- Tail logs: `tail -f data/server.log`
+- Health check: `curl -s http://127.0.0.1:8080/v1/health | jq`
+
+Notes:
+- `pnpm start` runs in the foreground and is not idempotent by itself. Prefer `pnpm run serve` on servers.
+- Ensure `.env` has a valid `ETH_RPC_URL` before starting.
 
 ## Configuration
 
