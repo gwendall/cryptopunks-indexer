@@ -91,9 +91,20 @@ Base URL: `http://localhost:8080`
 - `GET /v1/health` — `{ ok, latest, lastSynced, behind }`
 - `GET /v1/progress` — full sync progress (deploy, lastSynced, latest, behind, last run timings)
 - `GET /v1/owners` — map of punkIndex → owner
+- `GET /v1/owners/:address` — list of punk indices owned by `:address`
 - `GET /v1/market` — `{ offers, bids, floor }`
-- `GET /v1/events?fromCursor=&limit=1000` — unified events with `cursor` for paging
-- `GET /v1/events/normalized?fromCursor=&limit=1000` — normalized events (claim/list/bid/sale/transfer)
+- `GET /v1/punks/:id` — `{ punkIndex, owner, offer, bids }` (active market state)
+- `GET /v1/punks/:id/events` — same as `/v1/events` scoped to one punk
+- `GET /v1/events` — unified events with pagination and filters
+  - Query params:
+    - `limit` (int, 1–5000; default 1000)
+    - `fromCursor` or `cursor` (string `block:log`), for forward paging
+    - `fromBlock`, `toBlock` (ints)
+    - `types` (CSV of `Assign,PunkTransfer,PunkOffered,PunkNoLongerForSale,PunkBidEntered,PunkBidWithdrawn,PunkBought`)
+    - `punk` (CSV of punk indices)
+    - `address` (match relevant address fields for each type)
+  - Returns: `{ events: [...], nextCursor }`
+- `GET /v1/events/normalized` — same filters as `/v1/events`, returns normalized event schema for apps
 - WebSocket: `ws://localhost:8080/ws` — pushes `{ type: 'events', events: [...] }` after each sync batch
 
 Provider tips:
