@@ -100,6 +100,27 @@ Notes:
 - `pnpm start` runs in the foreground and is not idempotent by itself. Prefer `pnpm run serve` on servers.
 - Ensure `.env` has a valid `ETH_RPC_URL` before starting.
 
+## PM2 (Process Manager)
+
+If you prefer PM2 over systemd or the bundled `serve` script, an ecosystem file is included.
+
+Setup (one time):
+- Install PM2 globally: `npm i -g pm2`
+- From the repo dir: `pnpm install`
+- Configure PM2 to auto-start on boot: `pnpm run pm2:startup` (then follow printed instructions)
+
+Start/Manage:
+- Start: `pnpm run pm2:start`
+- Status: `pm2 ls`
+- Logs: `pnpm run pm2:logs` (files are in `data/pm2-*.log`)
+- Restart after an update: `pnpm run pm2:restart`
+- Stop: `pnpm run pm2:stop`
+- Persist process list: `pnpm run pm2:save`
+
+What it runs:
+- `node --import tsx src/server.ts` with env loaded from `.env` (via `dotenv/config` in code)
+- Restarts on crashes, writes logs to `data/pm2-*.log`
+
 ## Configuration
 
 - `ETH_RPC_URL` (required): HTTP(s) RPC URL to Ethereum mainnet.

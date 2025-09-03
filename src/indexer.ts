@@ -255,6 +255,7 @@ export async function runSync(): Promise<void> {
   if (fromBlock > latestTarget) {
     console.log(`Up to date. last_synced_block=${lastSynced}, latest=${latestTarget}`);
     const now = Date.now();
+    const skipTS = process.env.SKIP_TIMESTAMPS === '1';
     runtimeProgress = {
       isSyncing: false,
       deployBlock: Number.isFinite(deployBlock) ? Number(deployBlock) : null,
@@ -269,7 +270,7 @@ export async function runSync(): Promise<void> {
       startedAt: now,
       updatedAt: now,
       completedAt: now,
-      skipTimestamps,
+      skipTimestamps: skipTS,
       statusLine: 'Up to date',
     };
     return;
@@ -326,25 +327,13 @@ export async function runSync(): Promise<void> {
     if (m > 0) return `${m}m${s}s`;
     return `${s}s`;
   }
-  function renderProgress() {
-    const nowMs = Date.now();
+  function updateSnapshot(nowMs: number) {
     const elapsed = (nowMs - t0) / 1000;
     const pct = totalBlocks > 0 ? (processedBlocks / totalBlocks) : 0;
     const instAvg = elapsed > 0 ? processedBlocks / elapsed : 0;
     const speed = (emaSpeedBlkPerSec ?? instAvg);
     const remaining = Math.max(0, totalBlocks - processedBlocks);
     const etaSec = speed > 0 ? remaining / speed : Infinity;
-    const line = [
-      pc.bold(pc.cyan('Sync')),
-      `${fmtNum(startFromBlock)}${pc.dim('→')}${fmtNum(latestTarget)}`,
-      pc.bold(pc.green(`${(pct * 100).toFixed(2)}%`)),
-      pc.dim('|'), `${fmtNum(processedBlocks)}/${fmtNum(totalBlocks)} blks`,
-      pc.dim('|'), `${fmtNum(processedLogs)} logs`,
-      pc.dim('|'), `win ${fmtNum(windowSize)}`,
-      pc.dim('|'), `${Math.max(0, speed).toFixed(0)} blk/s`,
-      pc.dim('|'), `ETA ${fmtDuration(etaSec)}`
-    ].filter(Boolean).join(' ');
-    // update runtime snapshot (plain string without ANSI)
     const plainLine = [
       'Sync', `${startFromBlock}→${latestTarget}`,
       `${(pct * 100).toFixed(2)}%`, '|', `${processedBlocks}/${totalBlocks} blks`,
@@ -360,6 +349,21 @@ export async function runSync(): Promise<void> {
       updatedAt: nowMs,
       statusLine: plainLine,
     };
+    return { pct, speed, etaSec };
+  }
+  function renderProgress() {
+    const nowMs = Date.now();
+    const { pct, speed, etaSec } = updateSnapshot(nowMs);
+    const line = [
+      pc.bold(pc.cyan('Sync')),
+      `${fmtNum(startFromBlock)}${pc.dim('→')}${fmtNum(latestTarget)}`,
+      pc.bold(pc.green(`${(pct * 100).toFixed(2)}%`)),
+      pc.dim('|'), `${fmtNum(processedBlocks)}/${fmtNum(totalBlocks)} blks`,
+      pc.dim('|'), `${fmtNum(processedLogs)} logs`,
+      pc.dim('|'), `win ${fmtNum(windowSize)}`,
+      pc.dim('|'), `${Math.max(0, speed).toFixed(0)} blk/s`,
+      pc.dim('|'), `ETA ${fmtDuration(etaSec)}`
+    ].filter(Boolean).join(' ');
     if (tty) {
       process.stdout.write(`\x1b[2K\r${line}`);
     } else {
@@ -440,7 +444,7 @@ export async function runSync(): Promise<void> {
         if (step <= 0) step = 1;
         // Small backoff to be kind on providers
         await sleep(500);
-        if (tty) { windowSize = step; renderProgress(); }
+        windowSize = step; if (tty) { renderProgress(); } else { updateSnapshot(Date.now()); }
         continue;
       }
     }
@@ -563,8 +567,9 @@ export async function runSync(): Promise<void> {
         : (EMA_ALPHA * sample + (1 - EMA_ALPHA) * emaSpeedBlkPerSec);
       lastTickMs = nowMs;
     }
+    // Always update snapshot, print accordingly
     if (tty) renderProgress();
-    else console.log(`Indexed blocks ${fromBlock}-${toBlock} | logs=${logs.length} | parsed=${counters.parsed}`);
+    else { updateSnapshot(Date.now()); console.log(`Indexed blocks ${fromBlock}-${toBlock} | logs=${logs.length} | parsed=${counters.parsed}`); }
     fromBlock = toBlock + 1;
   }
   if (tty) process.stdout.write('\n');
@@ -572,6 +577,13 @@ export async function runSync(): Promise<void> {
   const totalParsed = counters.parsed;
   const types = Object.entries(counters.byType).map(([k, v]) => `${k}:${v}`).join(', ');
   console.log(`Parsed events: ${totalParsed}${types ? ' [' + types + ']' : ''}`);
+  // finalize runtime progress on completion
+  runtimeProgress = {
+    ...runtimeProgress,
+    isSyncing: false,
+    completedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
   if (hasWriteLock) releaseWriteLock();
 }
 
@@ -711,16 +723,8 @@ export async function backfillTimestamps(): Promise<{ blocks: number; updated: n
           continue;
         }
         throw e;
-  }
-
-  // finalize runtime progress on completion
-  runtimeProgress = {
-    ...runtimeProgress,
-    isSyncing: false,
-    completedAt: Date.now(),
-    updatedAt: Date.now(),
-  };
-}
+      }
+    }
 
     processedBlocks += slice.length;
     const dt = (Date.now() - t0) / 1000;
