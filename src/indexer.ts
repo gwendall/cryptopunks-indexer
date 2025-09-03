@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { Interface, JsonRpcProvider, id } from 'ethers';
+import { Interface, JsonRpcProvider, id, type Log } from 'ethers';
 import pc from 'picocolors';
 import { CONTRACT_ADDRESS, PUNKS_ABI, DEFAULTS, DEFAULT_DEPLOY_BLOCK } from './constants.js';
 import { openDb, getMeta, setMeta } from './db.js';
@@ -14,11 +14,21 @@ const TOPICS0 = [
   id('PunkBidWithdrawn(uint256,uint256,address)'),
   id('PunkBought(uint256,uint256,address,address)'),
 ];
+const TOPIC_NAME = new Map([
+  [id('Assign(address,uint256)'), 'Assign'],
+  [id('PunkTransfer(address,address,uint256)'), 'PunkTransfer'],
+  [id('PunkOffered(uint256,uint256,address)'), 'PunkOffered'],
+  [id('PunkNoLongerForSale(uint256)'), 'PunkNoLongerForSale'],
+  [id('PunkBidEntered(uint256,uint256,address)'), 'PunkBidEntered'],
+  [id('PunkBidWithdrawn(uint256,uint256,address)'), 'PunkBidWithdrawn'],
+  [id('PunkBought(uint256,uint256,address,address)'), 'PunkBought'],
+]);
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function sleep(ms: number) { return new Promise<void>(r => setTimeout(r, ms)); }
 
-function providerRangeHint(error) {
-  const msg = (error?.message || error?.error?.message || '').toString().toLowerCase();
+function providerRangeHint(error: unknown): number | null {
+  const err: any = error as any;
+  const msg = (err?.message || err?.error?.message || '').toString().toLowerCase();
   // Alchemy Free: "under the free tier ... up to a 10 block range"
   if (msg.includes('10 block range')) return 10;
   // Infura often uses -32005 with too many results; reduce range
@@ -38,7 +48,7 @@ function getConfig() {
   return { rpcUrl, startBlock, stopBlock, chunkSize, deployBlockEnv };
 }
 
-async function discoverDeployBlock(provider) {
+async function discoverDeployBlock(provider: JsonRpcProvider) {
   // Binary search the first block where code exists at CONTRACT_ADDRESS
   const latest = await provider.getBlockNumber();
   let lo = 0, hi = latest; // inclusive search for first code-present
@@ -58,7 +68,7 @@ async function discoverDeployBlock(provider) {
   return lo;
 }
 
-export async function runSync() {
+export async function runSync(): Promise<void> {
   const { rpcUrl, startBlock, stopBlock, chunkSize, deployBlockEnv } = getConfig();
   const provider = new JsonRpcProvider(rpcUrl);
   const db = openDb();
@@ -97,19 +107,20 @@ export async function runSync() {
   let processedLogs = 0;
   let windowSize = chunkSize;
   // Smoothed speed (EMA)
-  let emaSpeedBlkPerSec = null;
+  let emaSpeedBlkPerSec: number | null = null;
   let lastTickMs = Date.now();
   const EMA_ALPHA = 0.2; // 20% new sample, 80% history
   const skipTimestamps = process.env.SKIP_TIMESTAMPS === '1';
+  const counters: { parsed: number; byType: Record<string, number> } = { parsed: 0, byType: Object.create(null) };
 
-  function fmtNum(n) {
+  function fmtNum(n: number | null) {
     if (n == null || isNaN(n)) return '-';
     if (n < 1000) return String(n);
     if (n < 1e6) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
     if (n < 1e9) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
     return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
   }
-  function fmtDuration(sec) {
+  function fmtDuration(sec: number) {
     if (!isFinite(sec) || sec < 0) return '—';
     const s = Math.floor(sec % 60);
     const m = Math.floor((sec / 60) % 60);
@@ -131,7 +142,7 @@ export async function runSync() {
     const line = [
       pc.bold(pc.cyan('Sync')),
       `${fmtNum(startFromBlock)}${pc.dim('→')}${fmtNum(latestTarget)}`,
-      pc.bold(pc.green(`${(pct * 100).toFixed(1)}%`)),
+      pc.bold(pc.green(`${(pct * 100).toFixed(2)}%`)),
       pc.dim('|'), `${fmtNum(processedBlocks)}/${fmtNum(totalBlocks)} blks`,
       pc.dim('|'), `${fmtNum(processedLogs)} logs`,
       pc.dim('|'), `win ${fmtNum(windowSize)}`,
@@ -199,16 +210,17 @@ export async function runSync() {
     // Adaptively choose a workable toBlock for the provider; persist last good step
     let step = Math.min(currentStep, latestTarget - fromBlock + 1);
     let toBlock;
-    let logs;
+    let logs: Log[];
     for (;;) {
       try {
         toBlock = Math.min(fromBlock + step - 1, latestTarget);
-        logs = await provider.getLogs({
-          address: CONTRACT_ADDRESS,
-          topics: [TOPICS0],
-          fromBlock,
-          toBlock,
-        });
+        const filter: any = { address: CONTRACT_ADDRESS, fromBlock, toBlock };
+        // We intentionally skip topics filtering by default to avoid signature mismatches across providers.
+        // If you want to enable topic filtering, set FILTER_TOPICS=1.
+        if (process.env.FILTER_TOPICS === '1') {
+          filter.topics = [TOPICS0];
+        }
+        logs = await provider.getLogs(filter);
         break; // success
       } catch (e) {
         const hinted = providerRangeHint(e);
@@ -226,7 +238,7 @@ export async function runSync() {
 
     // Batch fetch timestamps for unique blocks
     const uniqueBlocks = skipTimestamps ? [] : [...new Set(logs.map(l => l.blockNumber))];
-    const blockTs = new Map();
+    const blockTs = new Map<number, number>();
     if (!skipTimestamps && uniqueBlocks.length) {
       await Promise.all(uniqueBlocks.map(async (bn) => {
         const b = await provider.getBlock(bn);
@@ -234,17 +246,19 @@ export async function runSync() {
       }));
     }
 
-    // Sort by blockNumber asc then logIndex asc for deterministic processing
-    logs.sort((a, b) => (a.blockNumber - b.blockNumber) || (a.logIndex - b.logIndex));
+    // Sort by blockNumber asc then index asc for deterministic processing (ethers v6 uses `index`)
+    logs.sort((a, b) => (a.blockNumber - b.blockNumber) || (a.index - b.index));
 
     const tx = db.transaction(() => {
+      let printed = 0;
+      const verbose = (process.env.VERBOSE === '1' || process.env.VERBOSE === 'true');
       for (const log of logs) {
         const ts = skipTimestamps ? null : (blockTs.get(log.blockNumber) ?? null);
         insertRaw.run(
           log.blockNumber,
           ts,
           log.transactionHash,
-          log.logIndex,
+          log.index,
           log.address,
           log.topics[0] ?? null,
           log.topics[1] ?? null,
@@ -252,60 +266,79 @@ export async function runSync() {
           log.topics[3] ?? null,
           log.data
         );
-        let parsed;
+        let parsed: any;
         try {
           parsed = iface.parseLog({ topics: log.topics, data: log.data });
-        } catch {
-          continue; // skip unknown topics
+        } catch (e) {
+          // If topic0 is known but parse failed, warn once per chunk
+          const t0 = log.topics?.[0];
+          const name = t0 ? (TOPIC_NAME.get(t0) || 'UnknownTopic') : 'NoTopic0';
+          if (name) {
+            console.warn(`Warning: failed to parse ${name} @${log.blockNumber}:${log.index} tx=${log.transactionHash}`);
+          }
+          continue; // skip unknown or unparsable
         }
-        const name = parsed.name;
-        const args = parsed.args;
+        const name: string = parsed.name;
+        const args: any = parsed.args;
 
         if (name === 'Assign') {
           const punkIndex = Number(args.punkIndex);
           const to = String(args.to);
-          insertAssign.run(punkIndex, to, log.blockNumber, ts, log.transactionHash, log.logIndex);
+          insertAssign.run(punkIndex, to, log.blockNumber, ts, log.transactionHash, log.index);
           upsertOwner.run(punkIndex, to);
+          if (verbose && printed < 5) { console.log(`Assign punk=${punkIndex} to=${to} @${log.blockNumber}:${log.index}`); printed++; }
         } else if (name === 'PunkTransfer') {
           const punkIndex = Number(args.punkIndex);
           const from = String(args.from);
           const to = String(args.to);
-          insertTransfer.run(punkIndex, from, to, log.blockNumber, ts, log.transactionHash, log.logIndex);
+          insertTransfer.run(punkIndex, from, to, log.blockNumber, ts, log.transactionHash, log.index);
           upsertOwner.run(punkIndex, to);
+          if (verbose && printed < 5) { console.log(`Transfer punk=${punkIndex} ${from}→${to} @${log.blockNumber}:${log.index}`); printed++; }
         } else if (name === 'PunkOffered') {
           const punkIndex = Number(args.punkIndex);
           const minValue = BigInt(args.minValue).toString();
           const toAddr = args.toAddress ? String(args.toAddress) : null;
-          insertOffer.run(punkIndex, minValue, toAddr, log.blockNumber, ts, log.transactionHash, log.logIndex);
+          insertOffer.run(punkIndex, minValue, toAddr, log.blockNumber, ts, log.transactionHash, log.index);
+          // Deactivate previous active offers for this punk, keep only latest as active
+          db.prepare(`UPDATE offers SET active = 0 WHERE punk_index = ? AND active = 1 AND (block_number < ? OR (block_number = ? AND log_index < ?))`).run(punkIndex, log.blockNumber, log.blockNumber, log.index);
+          if (verbose && printed < 5) { console.log(`List punk=${punkIndex} min=${minValue} to=${toAddr ?? 'any'} @${log.blockNumber}:${log.index}`); printed++; }
         } else if (name === 'PunkNoLongerForSale') {
           const punkIndex = Number(args.punkIndex);
-          insertOfferCancel.run(punkIndex, log.blockNumber, ts, log.transactionHash, log.logIndex);
+          insertOfferCancel.run(punkIndex, log.blockNumber, ts, log.transactionHash, log.index);
           // Mark all active offers for this punk as inactive up to this block
           db.prepare(`UPDATE offers SET active = 0 WHERE punk_index = ? AND active = 1`).run(punkIndex);
+          if (verbose && printed < 5) { console.log(`List cancel punk=${punkIndex} @${log.blockNumber}:${log.index}`); printed++; }
         } else if (name === 'PunkBidEntered') {
           const punkIndex = Number(args.punkIndex);
           const value = BigInt(args.value).toString();
           const fromAddr = String(args.fromAddress);
-          insertBid.run(punkIndex, value, fromAddr, log.blockNumber, ts, log.transactionHash, log.logIndex);
+          insertBid.run(punkIndex, value, fromAddr, log.blockNumber, ts, log.transactionHash, log.index);
+          // Deactivate previous active bids by same address on this punk
+          db.prepare(`UPDATE bids SET active = 0 WHERE punk_index = ? AND from_address = ? AND active = 1 AND (block_number < ? OR (block_number = ? AND log_index < ?))`).run(punkIndex, fromAddr, log.blockNumber, log.blockNumber, log.index);
+          if (verbose && printed < 5) { console.log(`Bid punk=${punkIndex} value=${value} from=${fromAddr} @${log.blockNumber}:${log.index}`); printed++; }
         } else if (name === 'PunkBidWithdrawn') {
           const punkIndex = Number(args.punkIndex);
           const value = BigInt(args.value).toString();
           const fromAddr = String(args.fromAddress);
-          insertBidWithdrawn.run(punkIndex, value, fromAddr, log.blockNumber, ts, log.transactionHash, log.logIndex);
+          insertBidWithdrawn.run(punkIndex, value, fromAddr, log.blockNumber, ts, log.transactionHash, log.index);
           // Mark active bids from this address on this punk as inactive
           db.prepare(`UPDATE bids SET active = 0 WHERE punk_index = ? AND from_address = ? AND active = 1`).run(punkIndex, fromAddr);
+          if (verbose && printed < 5) { console.log(`Bid cancel punk=${punkIndex} from=${fromAddr} @${log.blockNumber}:${log.index}`); printed++; }
         } else if (name === 'PunkBought') {
           const punkIndex = Number(args.punkIndex);
           const value = BigInt(args.value).toString();
           const fromAddr = String(args.fromAddress);
           const toAddr = String(args.toAddress);
-          insertBuy.run(punkIndex, value, fromAddr, toAddr, log.blockNumber, ts, log.transactionHash, log.logIndex);
+          insertBuy.run(punkIndex, value, fromAddr, toAddr, log.blockNumber, ts, log.transactionHash, log.index);
           upsertOwner.run(punkIndex, toAddr);
           // Resolve offers on purchase
           db.prepare(`UPDATE offers SET active = 0 WHERE punk_index = ? AND active = 1`).run(punkIndex);
           // Resolve bids from buyer or seller possibly; keep history but deactivate all active bids on this punk
           db.prepare(`UPDATE bids SET active = 0 WHERE punk_index = ? AND active = 1`).run(punkIndex);
+          if (verbose && printed < 5) { console.log(`Sale punk=${punkIndex} value=${value} ${fromAddr}→${toAddr} @${log.blockNumber}:${log.index}`); printed++; }
         }
+        counters.parsed += 1;
+        counters.byType[name] = (counters.byType[name] || 0) + 1;
       }
       setMeta(db, 'last_synced_block', toBlock);
     });
@@ -323,10 +356,14 @@ export async function runSync() {
       lastTickMs = nowMs;
     }
     if (tty) renderProgress();
-    else console.log(`Indexed blocks ${fromBlock}-${toBlock} | logs=${logs.length}`);
+    else console.log(`Indexed blocks ${fromBlock}-${toBlock} | logs=${logs.length} | parsed=${counters.parsed}`);
     fromBlock = toBlock + 1;
   }
   if (tty) process.stdout.write('\n');
+  // Summary
+  const totalParsed = counters.parsed;
+  const types = Object.entries(counters.byType).map(([k, v]) => `${k}:${v}`).join(', ');
+  console.log(`Parsed events: ${totalParsed}${types ? ' [' + types + ']' : ''}`);
 }
 
 export function exportOwners() {
@@ -336,52 +373,105 @@ export function exportOwners() {
   return out;
 }
 
-export function exportOperationsGrouped() {
+export function exportOperationsGrouped(punkIndex = null) {
   const db = openDb();
+  const where = punkIndex == null ? '' : 'WHERE punk_index = ?';
   const assigns = db.prepare(`
     SELECT punk_index AS punkIndex, to_address AS toAddress, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex
-    FROM assigns ORDER BY block_number, log_index
-  `).all();
+    FROM assigns ${where} ORDER BY block_number, log_index
+  `).all(punkIndex == null ? [] : [punkIndex]);
   const transfers = db.prepare(`
     SELECT punk_index AS punkIndex, from_address AS fromAddress, to_address AS toAddress, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex
-    FROM transfers ORDER BY block_number, log_index
-  `).all();
+    FROM transfers ${where} ORDER BY block_number, log_index
+  `).all(punkIndex == null ? [] : [punkIndex]);
   const offers = db.prepare(`
     SELECT punk_index AS punkIndex, min_value_wei AS minValueWei, to_address AS toAddress, active, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex
-    FROM offers ORDER BY block_number, log_index
-  `).all();
+    FROM offers ${where} ORDER BY block_number, log_index
+  `).all(punkIndex == null ? [] : [punkIndex]);
   const offerCancellations = db.prepare(`
     SELECT punk_index AS punkIndex, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex
-    FROM offer_cancellations ORDER BY block_number, log_index
-  `).all();
+    FROM offer_cancellations ${where} ORDER BY block_number, log_index
+  `).all(punkIndex == null ? [] : [punkIndex]);
   const bids = db.prepare(`
     SELECT punk_index AS punkIndex, value_wei AS valueWei, from_address AS fromAddress, active, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex
-    FROM bids ORDER BY block_number, log_index
-  `).all();
+    FROM bids ${where} ORDER BY block_number, log_index
+  `).all(punkIndex == null ? [] : [punkIndex]);
   const bidWithdrawals = db.prepare(`
     SELECT punk_index AS punkIndex, value_wei AS valueWei, from_address AS fromAddress, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex
-    FROM bid_withdrawals ORDER BY block_number, log_index
-  `).all();
+    FROM bid_withdrawals ${where} ORDER BY block_number, log_index
+  `).all(punkIndex == null ? [] : [punkIndex]);
   const buys = db.prepare(`
     SELECT punk_index AS punkIndex, value_wei AS valueWei, from_address AS fromAddress, to_address AS toAddress, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex
-    FROM buys ORDER BY block_number, log_index
-  `).all();
+    FROM buys ${where} ORDER BY block_number, log_index
+  `).all(punkIndex == null ? [] : [punkIndex]);
 
   return { assigns, transfers, offers, offerCancellations, bids, bidWithdrawals, buys };
 }
 
-export function exportEventsUnified() {
+export function exportEventsUnified(punkIndex = null) {
   const db = openDb();
+  const where = punkIndex == null ? '' : ' WHERE punk_index = ?';
+  const params = punkIndex == null ? [] : [punkIndex];
   const queries = [
-    { type: 'Assign', sql: `SELECT 'Assign' as type, punk_index AS punkIndex, NULL AS fromAddress, to_address AS toAddress, NULL AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM assigns` },
-    { type: 'PunkTransfer', sql: `SELECT 'PunkTransfer' as type, punk_index AS punkIndex, from_address AS fromAddress, to_address AS toAddress, NULL AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM transfers` },
-    { type: 'PunkOffered', sql: `SELECT 'PunkOffered' as type, punk_index AS punkIndex, NULL AS fromAddress, to_address AS toAddress, NULL AS valueWei, min_value_wei AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM offers` },
-    { type: 'PunkNoLongerForSale', sql: `SELECT 'PunkNoLongerForSale' as type, punk_index AS punkIndex, NULL AS fromAddress, NULL AS toAddress, NULL AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM offer_cancellations` },
-    { type: 'PunkBidEntered', sql: `SELECT 'PunkBidEntered' as type, punk_index AS punkIndex, from_address AS fromAddress, NULL AS toAddress, value_wei AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM bids` },
-    { type: 'PunkBidWithdrawn', sql: `SELECT 'PunkBidWithdrawn' as type, punk_index AS punkIndex, from_address AS fromAddress, NULL AS toAddress, value_wei AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM bid_withdrawals` },
-    { type: 'PunkBought', sql: `SELECT 'PunkBought' as type, punk_index AS punkIndex, from_address AS fromAddress, to_address AS toAddress, value_wei AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM buys` },
+    { type: 'Assign', sql: `SELECT 'Assign' as type, punk_index AS punkIndex, NULL AS fromAddress, to_address AS toAddress, NULL AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM assigns${where}` },
+    { type: 'PunkTransfer', sql: `SELECT 'PunkTransfer' as type, punk_index AS punkIndex, from_address AS fromAddress, to_address AS toAddress, NULL AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM transfers${where}` },
+    { type: 'PunkOffered', sql: `SELECT 'PunkOffered' as type, punk_index AS punkIndex, NULL AS fromAddress, to_address AS toAddress, NULL AS valueWei, min_value_wei AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM offers${where}` },
+    { type: 'PunkNoLongerForSale', sql: `SELECT 'PunkNoLongerForSale' as type, punk_index AS punkIndex, NULL AS fromAddress, NULL AS toAddress, NULL AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM offer_cancellations${where}` },
+    { type: 'PunkBidEntered', sql: `SELECT 'PunkBidEntered' as type, punk_index AS punkIndex, from_address AS fromAddress, NULL AS toAddress, value_wei AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM bids${where}` },
+    { type: 'PunkBidWithdrawn', sql: `SELECT 'PunkBidWithdrawn' as type, punk_index AS punkIndex, from_address AS fromAddress, NULL AS toAddress, value_wei AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM bid_withdrawals${where}` },
+    { type: 'PunkBought', sql: `SELECT 'PunkBought' as type, punk_index AS punkIndex, from_address AS fromAddress, to_address AS toAddress, value_wei AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM buys${where}` },
   ];
-  const rows = queries.flatMap(q => db.prepare(q.sql).all());
+  const rows = queries.flatMap(q => db.prepare(q.sql).all(...(params.length ? [params[0]] : [])));
   rows.sort((a, b) => (a.blockNumber - b.blockNumber) || (a.logIndex - b.logIndex));
   return rows;
+}
+
+export function exportEventsNormalized(punkIndex = null) {
+  const unified = exportEventsUnified(punkIndex);
+  // Map to normalized types and snake_case fields
+  const out = unified.map((e) => {
+    let type;
+    switch (e.type) {
+      case 'Assign': type = 'claim'; break;
+      case 'PunkTransfer': type = 'transfer'; break;
+      case 'PunkOffered': type = 'list'; break;
+      case 'PunkNoLongerForSale': type = 'list_cancel'; break;
+      case 'PunkBidEntered': type = 'bid'; break;
+      case 'PunkBidWithdrawn': type = 'bid_cancel'; break;
+      case 'PunkBought': type = 'sale'; break;
+      default: type = e.type; break;
+    }
+    const valueWei = e.valueWei ?? e.minValueWei ?? null;
+    return {
+      type,
+      punk_id: e.punkIndex,
+      from_address: e.fromAddress ?? null,
+      to_address: e.toAddress ?? null,
+      value_wei: valueWei != null ? String(valueWei) : null,
+      block_number: e.blockNumber,
+      block_timestamp: e.blockTimestamp ?? null,
+      tx_hash: e.txHash,
+      log_index: e.logIndex,
+    };
+  });
+  return out;
+}
+
+export function exportActiveOffers(limit = null) {
+  const db = openDb();
+  const sql = `SELECT punk_index AS punkIndex, min_value_wei AS minValueWei, to_address AS toAddress, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM offers WHERE active = 1 ORDER BY CAST(min_value_wei AS INTEGER) ASC, block_number ASC ${limit ? 'LIMIT ?' : ''}`;
+  return db.prepare(sql).all(...(limit ? [limit] : []));
+}
+
+export function exportActiveBids(limit = null) {
+  const db = openDb();
+  const sql = `SELECT punk_index AS punkIndex, value_wei AS valueWei, from_address AS fromAddress, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM bids WHERE active = 1 ORDER BY CAST(value_wei AS INTEGER) DESC, block_number DESC ${limit ? 'LIMIT ?' : ''}`;
+  return db.prepare(sql).all(...(limit ? [limit] : []));
+}
+
+export function exportFloor() {
+  const db = openDb();
+  const row = db.prepare(`SELECT MIN(CAST(min_value_wei AS INTEGER)) AS floorWei FROM offers WHERE active = 1`).get();
+  const floorWei = row?.floorWei != null ? String(row.floorWei) : null;
+  return { floorWei };
 }

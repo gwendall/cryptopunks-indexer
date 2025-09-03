@@ -5,7 +5,7 @@ import path from "node:path";
 const DATA_DIR = path.join(process.cwd(), "data");
 const DB_PATH = path.join(DATA_DIR, "punks.sqlite");
 
-export function openDb() {
+export function openDb(): any {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   const db = new Database(DB_PATH);
   db.pragma("journal_mode = WAL");
@@ -14,7 +14,7 @@ export function openDb() {
   return db;
 }
 
-function migrate(db) {
+function migrate(db: any) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
@@ -119,13 +119,12 @@ function migrate(db) {
   `);
 }
 
-export function getMeta(db, key, defaultValue = null) {
+export function getMeta<T = string | null>(db: any, key: string, defaultValue: T | null = null): T | null {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(key);
   if (!row) return defaultValue;
-  return row.value;
+  return row.value as T;
 }
 
-export function setMeta(db, key, value) {
+export function setMeta(db: any, key: string, value: string | number | bigint) {
   db.prepare("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, String(value));
 }
-

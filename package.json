@@ -2,14 +2,15 @@
   "name": "indexer",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "src/index.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node src/index.js",
-    "sync": "node src/index.js sync",
-    "export": "node src/index.js export",
-    "export:ops": "node src/index.js export-ops",
-    "export:events": "node src/index.js export-events",
+    "start": "tsx src/index.ts",
+    "sync": "tsx src/index.ts sync",
+    "export": "tsx src/index.ts export",
+    "export:ops": "tsx src/index.ts export-ops",
+    "export:events": "tsx src/index.ts export-events",
+    "type-check": "tsc --noEmit",
     "docker:up": "docker compose up -d",
     "docker:logs": "docker compose logs -f",
     "docker:down": "docker compose down",
@@ -29,5 +30,11 @@
     "dotenv": "^17.2.2",
     "ethers": "^6.15.0",
     "picocolors": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.18.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
   }
 }

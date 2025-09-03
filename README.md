@@ -97,9 +97,16 @@ Tip: For accurate owners and history, index from block `0`.
 ## Commands
 
 - `npm run sync`: Index chain data into SQLite (incremental). Set `TAIL=1` to keep indexing new blocks. Optionally add `ETH_WS_URL` for near‑realtime triggers.
-- `npm run export`: Export current owners to `data/owners.json`.
-- `node src/index.js export-ops`: Export grouped operations to `data/operations_by_type.json`.
-- `node src/index.js export-events`: Export unified timeline to `data/events.json`.
+  - Reset from scratch: `npm run sync -- --reset` (deletes `data/punks.sqlite` and resumes from deploy block)
+  - Verbose parsing logs (sample per chunk): `npm run sync -- --verbose` (or set `VERBOSE=1`)
+- `npm run export`: Export all snapshots (owners, grouped ops, timeline) into `data/`.
+  - Export only one type: `npm run export -- --owners` or `--ops` or `--events` (use `--` to pass flags).
+  - Filter by punk: `npm run export -- --ops --punk=1234` or `--events --punk=1234`.
+  - Export market state: `npm run export -- --market` (active listings, active bids, floor).
+  - Include normalized events (default in export‑all): `npm run export -- --normalized`
+- `npm run export:ops`: Export grouped operations to `data/operations_by_type.json`.
+- `npm run export:events`: Export unified timeline to `data/events.json`.
+- `node --import tsx src/index.ts verify` or `tsx src/index.ts verify`: Quick DB sanity check (counts per table, deploy and last synced blocks).
 
 ## Data Outputs
 
@@ -140,7 +147,7 @@ All outputs are deterministic, stable‑sorted by `blockNumber` then `logIndex` 
 ## Hosting Options (simple)
 
 - Render (Worker + Persistent Disk)
-  - Worker: command `node src/index.js sync`; env `ETH_RPC_URL`, `TAIL=1`
+  - Worker: command `node --import tsx src/index.ts sync`; env `ETH_RPC_URL`, `TAIL=1`
   - Add a persistent disk mounted at `/app/data`
 
 - Railway (Service + Volume)
@@ -163,8 +170,8 @@ Note: Heroku’s filesystem is ephemeral; prefer a disk‑backed host or switch 
 
 - Node 18+; install deps with `npm i`
 - Entry points:
-  - `src/index.js`: CLI (sync, export, export-ops, export-events, tailing)
-  - `src/indexer.js`: sync logic, event parsing, exports
+  - `src/index.ts`: CLI (sync, export, export-ops, export-events, tailing)
+  - `src/indexer.ts`: sync logic, event parsing, exports
   - `src/db.js`: SQLite schema and helpers
   - `src/constants.js`: ABI, contract address, defaults
 - Useful envs while iterating:
@@ -185,3 +192,26 @@ Resetting state: delete `data/punks.sqlite` or set `START_BLOCK=0` and resync.
 ---
 
 CryptoPunks predates ERC‑721; this indexer parses its custom events and stores both raw logs and typed/derived tables in SQLite.
+4) `data/market.json` — current market state
+
+```json
+{
+  "offers": [ { "punkIndex": 123, "minValueWei": "...", "toAddress": null, "blockNumber": 123, "txHash": "0x..." } ],
+  "bids":   [ { "punkIndex": 456, "valueWei": "...", "fromAddress": "0x...", "blockNumber": 456, "txHash": "0x..." } ],
+  "floor": { "floorWei": "..." }
+}
+```
+5) `data/events_normalized.json` — normalized event stream for apps
+
+- Event types: `claim`, `list`, `list_cancel`, `bid`, `bid_cancel`, `sale`, `transfer`
+- Fields per event: `type`, `punk_id`, `from_address`, `to_address`, `value_wei`, `block_number`, `block_timestamp`, `tx_hash`, `log_index`
+
+```json
+[
+  { "type": "claim", "punk_id": 0, "to_address": "0x...", "value_wei": null, "block_number": 0, "block_timestamp": 0, "tx_hash": "0x...", "log_index": 0 },
+  { "type": "list", "punk_id": 0, "to_address": null, "value_wei": "10000000000000000", "block_number": 1, "tx_hash": "0x...", "log_index": 1 },
+  { "type": "bid", "punk_id": 0, "from_address": "0x...", "value_wei": "20000000000000000", "block_number": 2, "tx_hash": "0x...", "log_index": 2 },
+  { "type": "sale", "punk_id": 0, "from_address": "0x...", "to_address": "0x...", "value_wei": "30000000000000000", "block_number": 3, "tx_hash": "0x...", "log_index": 3 },
+  { "type": "transfer", "punk_id": 1, "from_address": "0x...", "to_address": "0x...", "value_wei": null, "block_number": 4, "tx_hash": "0x...", "log_index": 0 }
+]
+```

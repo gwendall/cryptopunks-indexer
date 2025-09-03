@@ -3,8 +3,10 @@ FROM node:22-alpine AS base
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev || npm i --omit=dev
+# Install all deps incl. dev so we can run TS via tsx
+RUN npm ci || npm i
 
+COPY tsconfig.json ./
 COPY src ./src
 COPY .env.example ./
 COPY README.md ./
@@ -14,5 +16,4 @@ RUN mkdir -p /app/data
 
 # Default command indexes once. Override with env TAIL=1 to keep polling.
 ENV NODE_ENV=production
-CMD ["node", "src/index.js", "sync"]
-
+CMD ["node", "--import", "tsx", "src/index.ts", "sync"]

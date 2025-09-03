@@ -1,7 +1,7 @@
-export const CONTRACT_ADDRESS = "0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb";
+export const CONTRACT_ADDRESS: string = "0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb";
 
 // Minimal ABI: events only (CryptoPunks is not ERC-721 compliant)
-export const PUNKS_ABI = [
+export const PUNKS_ABI: readonly string[] = [
   // Assignment when a punk is initially claimed or assigned
   "event Assign(address indexed to, uint256 indexed punkIndex)",
 
@@ -22,8 +22,8 @@ export const PUNKS_ABI = [
 
 export const DEFAULTS = {
   CHUNK_SIZE: 5000,
-};
+} as const;
 
 // Optional known deployment block for CryptoPunks (if known you can set via env DEPLOY_BLOCK)
 // We will auto-discover if not provided.
-export const DEFAULT_DEPLOY_BLOCK = null;
+export const DEFAULT_DEPLOY_BLOCK: number | null = null;
