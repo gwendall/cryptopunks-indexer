@@ -3,7 +3,7 @@ import http from 'node:http';
 import url from 'node:url';
 import { WebSocketServer } from 'ws';
 import { JsonRpcProvider } from 'ethers';
-import { exportOwners, exportActiveOffers, exportActiveBids, exportFloor, exportEventsSinceCursor, formatCursor, parseCursor, getLastSyncedBlock } from './indexer.js';
+import { exportOwners, exportActiveOffers, exportActiveBids, exportFloor, exportEventsSinceCursor, exportEventsFiltered, formatCursor, parseCursor, getLastSyncedBlock } from './indexer.js';
 import { runSync } from './indexer.js';
 
 type Progress = {
@@ -88,16 +88,54 @@ const server = http.createServer(async (req, res) => {
       send(200, { offers, bids, floor });
       return;
     }
-    if (path === '/v1/events') {
+    if (path === '/v1/events' || path === '/v1/events/normalized') {
       const limit = Math.max(1, Math.min(5000, Number(query.limit || 1000)));
-      const { events, nextCursor } = exportEventsSinceCursor(query.fromCursor as string | undefined, limit, false);
-      send(200, { events: events.map((e: any) => ({ ...e, cursor: formatCursor(e.blockNumber, e.logIndex) })), nextCursor });
+      const normalized = path.endsWith('/normalized') || query.normalized === '1' || query.normalized === 'true';
+      const fromCursor = (query.fromCursor as string) || (query.cursor as string) || undefined;
+      const fromBlock = query.fromBlock != null ? Number(query.fromBlock) : undefined;
+      const toBlock = query.toBlock != null ? Number(query.toBlock) : undefined;
+      const types = (query.types as string | undefined)?.split(',').map(s => s.trim()).filter(Boolean);
+      const punkIndices = (query.punk as string | undefined)?.split(',').map(s => Number(s)).filter(n => Number.isFinite(n));
+      const address = (query.address as string | undefined) || undefined;
+      const { events, nextCursor } = exportEventsFiltered({ cursor: fromCursor, fromBlock, toBlock, types: types?.length ? types : undefined, punkIndices: punkIndices?.length ? punkIndices : undefined, address, limit, normalized });
+      send(200, { events, nextCursor });
       return;
     }
-    if (path === '/v1/events/normalized') {
-      const limit = Math.max(1, Math.min(5000, Number(query.limit || 1000)));
-      const { events, nextCursor } = exportEventsSinceCursor(query.fromCursor as string | undefined, limit, true);
-      send(200, { events, nextCursor });
+    if (path?.startsWith('/v1/punks/')) {
+      const parts = path.split('/');
+      const id = Number(parts[3]);
+      if (!Number.isFinite(id)) { send(400, { error: 'bad_punk' }); return; }
+      if (parts.length === 4 || parts[4] === '') {
+        // summary: owner + active market
+        const owners = exportOwners();
+        const owner = owners[String(id) as keyof typeof owners] || null;
+        // active offer
+        const offer = exportActiveOffers().find((o: any) => o.punkIndex === id) || null;
+        // active bids sorted by value desc
+        const bids = exportActiveBids().filter((b: any) => b.punkIndex === id);
+        send(200, { punkIndex: id, owner, offer, bids });
+        return;
+      }
+      if (parts[4] === 'events') {
+        const limit = Math.max(1, Math.min(5000, Number(query.limit || 1000)));
+        const normalized = query.normalized === '1' || query.normalized === 'true';
+        const fromCursor = (query.fromCursor as string) || (query.cursor as string) || undefined;
+        const fromBlock = query.fromBlock != null ? Number(query.fromBlock) : undefined;
+        const toBlock = query.toBlock != null ? Number(query.toBlock) : undefined;
+        const types = (query.types as string | undefined)?.split(',').map(s => s.trim()).filter(Boolean);
+        const { events, nextCursor } = exportEventsFiltered({ cursor: fromCursor, fromBlock, toBlock, types: types?.length ? types : undefined, punkIndices: [id], limit, normalized });
+        send(200, { events, nextCursor });
+        return;
+      }
+      send(404, { error: 'not_found' });
+      return;
+    }
+    if (path?.startsWith('/v1/owners/')) {
+      const addr = (path.split('/')[3] || '').toLowerCase();
+      if (!addr || !addr.startsWith('0x') || addr.length !== 42) { send(400, { error: 'bad_address' }); return; }
+      const owners = exportOwners();
+      const punks = Object.entries(owners).filter(([_, v]) => String(v).toLowerCase() === addr).map(([k]) => Number(k)).sort((a,b)=>a-b);
+      send(200, { owner: addr, punkIndices: punks });
       return;
     }
   } catch (e: any) {
@@ -186,4 +224,3 @@ if (process.env.ETH_WS_URL) {
 server.listen(PORT, () => {
   console.log(`API listening on :${PORT}`);
 });
-

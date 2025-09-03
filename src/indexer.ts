@@ -805,6 +805,111 @@ export function getLastSyncedBlock() {
   return v != null ? Number(v) : null;
 }
 
+// Advanced event export with filters and pagination
+export type EventFilter = {
+  cursor?: string | number | null;
+  fromBlock?: number | null;
+  toBlock?: number | null;
+  types?: string[] | null; // e.g., ['Assign','PunkBought']
+  punkIndices?: number[] | null;
+  address?: string | null; // matches any relevant address field
+  limit?: number;
+  normalized?: boolean;
+};
+
+const ALL_EVENT_TYPES = ['Assign','PunkTransfer','PunkOffered','PunkNoLongerForSale','PunkBidEntered','PunkBidWithdrawn','PunkBought'] as const;
+
+export function exportEventsFiltered(filter: EventFilter) {
+  const db = openDb();
+  const limit = Math.max(1, Math.min(5000, Number(filter.limit ?? 1000)));
+  const { bn, li } = parseCursor(filter.cursor ?? null);
+
+  const selected = (filter.types && filter.types.length)
+    ? ALL_EVENT_TYPES.filter(t => filter.types!.includes(t))
+    : Array.from(ALL_EVENT_TYPES);
+
+  const punkList = (filter.punkIndices && filter.punkIndices.length) ? filter.punkIndices : null;
+  const addr = filter.address ? String(filter.address).toLowerCase() : null;
+
+  const baseWhereParts: string[] = [];
+  const baseParams: any[] = [];
+  if (bn >= 0) { baseWhereParts.push('(block_number > ? OR (block_number = ? AND log_index > ?))'); baseParams.push(bn, bn, li); }
+  if (filter.fromBlock != null) { baseWhereParts.push('block_number >= ?'); baseParams.push(filter.fromBlock); }
+  if (filter.toBlock != null) { baseWhereParts.push('block_number <= ?'); baseParams.push(filter.toBlock); }
+  if (punkList) {
+    baseWhereParts.push(`punk_index IN (${punkList.map(() => '?').join(',')})`);
+    baseParams.push(...punkList);
+  }
+
+  const outRows: any[] = [];
+  function runQuery(sql: string, params: any[]) {
+    const rows = db.prepare(sql + ' LIMIT ?').all(...params, limit);
+    outRows.push(...rows);
+  }
+
+  for (const t of selected) {
+    const whereParts = baseWhereParts.slice();
+    const params = baseParams.slice();
+    if (addr) {
+      if (t === 'Assign') whereParts.push('LOWER(to_address) = ?');
+      else if (t === 'PunkTransfer') whereParts.push('(LOWER(from_address) = ? OR LOWER(to_address) = ?)');
+      else if (t === 'PunkOffered') whereParts.push('LOWER(IFNULL(to_address, "")) = ?');
+      else if (t === 'PunkNoLongerForSale') {
+        // no address in table; skip address filter → no results for this type when filtering by address
+        continue;
+      } else if (t === 'PunkBidEntered' || t === 'PunkBidWithdrawn') whereParts.push('LOWER(from_address) = ?');
+      else if (t === 'PunkBought') whereParts.push('(LOWER(from_address) = ? OR LOWER(to_address) = ?)');
+      // push addr param(s)
+      if (t === 'PunkTransfer' || t === 'PunkBought') { params.push(addr, addr); }
+      else if (t === 'Assign' || t === 'PunkOffered' || t === 'PunkBidEntered' || t === 'PunkBidWithdrawn') { params.push(addr); }
+    }
+    const where = whereParts.length ? (' WHERE ' + whereParts.join(' AND ')) : '';
+
+    if (t === 'Assign') runQuery(`SELECT 'Assign' AS type, punk_index AS punkIndex, to_address AS toAddress, NULL AS fromAddress, NULL AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM assigns${where} ORDER BY block_number, log_index`, params);
+    else if (t === 'PunkTransfer') runQuery(`SELECT 'PunkTransfer' AS type, punk_index AS punkIndex, to_address AS toAddress, from_address AS fromAddress, NULL AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM transfers${where} ORDER BY block_number, log_index`, params);
+    else if (t === 'PunkOffered') runQuery(`SELECT 'PunkOffered' AS type, punk_index AS punkIndex, to_address AS toAddress, NULL AS fromAddress, NULL AS valueWei, min_value_wei AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM offers${where} ORDER BY block_number, log_index`, params);
+    else if (t === 'PunkNoLongerForSale') runQuery(`SELECT 'PunkNoLongerForSale' AS type, punk_index AS punkIndex, NULL AS toAddress, NULL AS fromAddress, NULL AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM offer_cancellations${where} ORDER BY block_number, log_index`, params);
+    else if (t === 'PunkBidEntered') runQuery(`SELECT 'PunkBidEntered' AS type, punk_index AS punkIndex, NULL AS toAddress, from_address AS fromAddress, value_wei AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM bids${where} ORDER BY block_number, log_index`, params);
+    else if (t === 'PunkBidWithdrawn') runQuery(`SELECT 'PunkBidWithdrawn' AS type, punk_index AS punkIndex, NULL AS toAddress, from_address AS fromAddress, value_wei AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM bid_withdrawals${where} ORDER BY block_number, log_index`, params);
+    else if (t === 'PunkBought') runQuery(`SELECT 'PunkBought' AS type, punk_index AS punkIndex, to_address AS toAddress, from_address AS fromAddress, value_wei AS valueWei, NULL AS minValueWei, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM buys${where} ORDER BY block_number, log_index`, params);
+  }
+
+  outRows.sort((a, b) => (a.blockNumber - b.blockNumber) || (a.logIndex - b.logIndex));
+  let rows = outRows;
+  if (rows.length > limit) rows = rows.slice(0, limit);
+  const nextCursor = rows.length ? formatCursor(rows[rows.length - 1].blockNumber, rows[rows.length - 1].logIndex) : formatCursor(bn, li);
+
+  if (!filter.normalized) return { events: rows.map(e => ({ ...e })), nextCursor };
+
+  const mapped = rows.map((e) => {
+    let type;
+    switch (e.type) {
+      case 'Assign': type = 'claim'; break;
+      case 'PunkTransfer': type = 'transfer'; break;
+      case 'PunkOffered': type = 'list'; break;
+      case 'PunkNoLongerForSale': type = 'list_cancel'; break;
+      case 'PunkBidEntered': type = 'bid'; break;
+      case 'PunkBidWithdrawn': type = 'bid_cancel'; break;
+      case 'PunkBought': type = 'sale'; break;
+      default: type = e.type; break;
+    }
+    const valueWei = e.valueWei ?? e.minValueWei ?? null;
+    return {
+      type,
+      punk_id: e.punkIndex,
+      from_address: e.fromAddress ?? null,
+      to_address: e.toAddress ?? null,
+      value_wei: valueWei != null ? String(valueWei) : null,
+      block_number: e.blockNumber,
+      block_timestamp: e.blockTimestamp ?? null,
+      tx_hash: e.txHash,
+      log_index: e.logIndex,
+      cursor: formatCursor(e.blockNumber, e.logIndex),
+    };
+  });
+  return { events: mapped, nextCursor };
+}
+
 export function exportActiveOffers(limit = null) {
   const db = openDb();
   const sql = `SELECT punk_index AS punkIndex, min_value_wei AS minValueWei, to_address AS toAddress, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM offers WHERE active = 1 ORDER BY CAST(min_value_wei AS INTEGER) ASC, block_number ASC ${limit ? 'LIMIT ?' : ''}`;
