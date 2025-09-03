@@ -143,6 +143,49 @@ Base URL: `http://localhost:8080`
 - WebSocket: `ws://localhost:8080/ws` — pushes `{ type: 'events', events: [...] }` after each sync batch
 - SSE: `/v1/stream/progress` — live runtime sync progress updates (event: `progress` with the same fields as `runtime` in `/v1/progress`)
 
+### Frontend SSE Usage
+
+Browser (Progress stream):
+
+```js
+// Plain JS (runs in the browser)
+const es = new EventSource('http://your-host:8080/v1/stream/progress');
+
+es.addEventListener('progress', (ev) => {
+  const data = JSON.parse(ev.data);
+  // { isSyncing, startFromBlock, latestTarget, totalBlocks, processedBlocks, ... }
+  console.log('progress', data);
+});
+
+es.onopen = () => console.log('connected');
+es.onerror = (err) => console.warn('sse error', err);
+```
+
+React (client component):
+
+```tsx
+import { useEffect, useState } from 'react';
+
+export function UseProgress() {
+  const [progress, setProgress] = useState(null);
+  useEffect(() => {
+    const es = new EventSource('/v1/stream/progress'); // same-origin via proxy, or use full URL
+    const onMsg = (ev: MessageEvent) => setProgress(JSON.parse(ev.data));
+    es.addEventListener('progress', onMsg);
+    es.onerror = () => {/* optional retry/backoff handled by EventSource */};
+    return () => { es.removeEventListener('progress', onMsg); es.close(); };
+  }, []);
+  // render a bar
+  const pct = progress?.totalBlocks ? (progress.processedBlocks / progress.totalBlocks) * 100 : null;
+  return <div>{pct != null ? pct.toFixed(2) + '%' : '—'}</div>;
+}
+```
+
+Notes:
+- CORS is open (`Access-Control-Allow-Origin: *`), so you can connect from any origin.
+- Event name is `progress`. Each event’s `data` is a JSON string; parse it before use.
+- In Next.js/SSR, use this in a client component (it relies on `window.EventSource`).
+
 Realtime options (SSE vs WebSocket)
 - SSE (`/v1/stream/events`) is the simplest: HTTP-friendly, works behind CDNs/reverse proxies, auto-reconnect is trivial. Great for one-way streams from server → client.
 - WebSocket (`/ws`) is bidirectional and flexible if you need client → server messages. Slightly more operational overhead (proxies, keepalives).
