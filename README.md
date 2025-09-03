@@ -82,7 +82,8 @@ Stops with `docker compose down`. Data persists in `./data`.
 - `DEPLOY_BLOCK` (optional): CryptoPunks contract deploy block. If not set, the indexer auto-discovers it (via getCode binary search) and saves it to the DB meta table.
 - `SKIP_TIMESTAMPS` (optional): `1` to skip fetching block timestamps for speed. Default: `0`.
 - `FILTER_TOPICS` (optional): `1` to request only the tracked event topics (smaller responses; some providers behave better). Default: `0`.
- - `PORT` (optional): HTTP port for the built-in server. Default: `8080`.
+- `PORT` (optional): HTTP port for the built-in server. Default: `8080`.
+- `DISABLE_COMPRESSION` (optional): `1` to disable gzip/brotli compression on API responses.
 
 ## API (built‑in server)
 
@@ -106,6 +107,11 @@ Base URL: `http://localhost:8080`
   - Returns: `{ events: [...], nextCursor }`
 - `GET /v1/events/normalized` — same filters as `/v1/events`, returns normalized event schema for apps
 - WebSocket: `ws://localhost:8080/ws` — pushes `{ type: 'events', events: [...] }` after each sync batch
+
+Realtime options (SSE vs WebSocket)
+- SSE (`/v1/stream/events`) is the simplest: HTTP-friendly, works behind CDNs/reverse proxies, auto-reconnect is trivial. Great for one-way streams from server → client.
+- WebSocket (`/ws`) is bidirectional and flexible if you need client → server messages. Slightly more operational overhead (proxies, keepalives).
+- This server supports both. Prefer SSE unless you need bi‑directional messaging.
 
 Provider tips:
 - The indexer auto-adapts the block range if your provider rejects large `eth_getLogs` windows (e.g., Alchemy Free limits to 10 blocks).
