@@ -1,0 +1,17 @@
+version: "3.8"
+services:
+  indexer:
+    build: .
+    image: nakedpunks/indexer:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Set to 1 to keep polling new blocks continuously
+      - TAIL=${TAIL:-1}
+      # Optional: override poll interval in ms
+      - POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-15000}
+    volumes:
+      - ./data:/app/data
+    command: ["node", "src/index.js", "sync"]
+
