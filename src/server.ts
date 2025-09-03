@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import http from 'node:http';
 import url from 'node:url';
+import zlib from 'node:zlib';
 import { WebSocketServer } from 'ws';
 import { JsonRpcProvider } from 'ethers';
 import { exportOwners, exportActiveOffers, exportActiveBids, exportFloor, exportEventsSinceCursor, exportEventsFiltered, formatCursor, parseCursor, getLastSyncedBlock } from './indexer.js';
@@ -36,6 +37,7 @@ let progress: Progress = {
 };
 
 let lastBroadcastCursor = formatCursor(progress.lastSynced || 0, -1);
+const sseClients = new Set<{ write: (event: string, payload: any) => void }>();
 
 async function updateLatest() {
   try { progress.latest = await provider.getBlockNumber(); }
@@ -48,20 +50,46 @@ async function updateLatest() {
 }
 
 // Web server
+const DISABLE_COMPRESSION = process.env.DISABLE_COMPRESSION === '1';
 const server = http.createServer(async (req, res) => {
   // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') { res.writeHead(204).end(); return; }
+  if (req.method === 'HEAD') {
+    // Fast path: acknowledge endpoint without generating body
+    res.writeHead(200, { 'content-type': 'application/json', 'vary': 'Accept-Encoding' });
+    res.end();
+    return;
+  }
 
   const parsed = url.parse(req.url || '', true);
   const path = parsed.pathname || '/';
   const query = parsed.query || {} as Record<string, string>;
 
   const send = (code: number, body: any) => {
-    const data = JSON.stringify(body);
-    res.writeHead(code, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) });
+    const data = Buffer.from(JSON.stringify(body));
+    const ae = String(req.headers['accept-encoding'] || '');
+    const useBr = ae.includes('br') && typeof zlib.brotliCompress === 'function';
+    const useGz = !useBr && ae.includes('gzip');
+    if (!DISABLE_COMPRESSION && useBr) {
+      zlib.brotliCompress(data, (err, out) => {
+        if (err) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(data); return; }
+        res.writeHead(code, { 'content-type': 'application/json', 'content-encoding': 'br', 'vary': 'Accept-Encoding', 'content-length': out.length });
+        res.end(out);
+      });
+      return;
+    }
+    if (!DISABLE_COMPRESSION && useGz) {
+      zlib.gzip(data, (err, out) => {
+        if (err) { res.writeHead(code, { 'content-type': 'application/json' }); res.end(data); return; }
+        res.writeHead(code, { 'content-type': 'application/json', 'content-encoding': 'gzip', 'vary': 'Accept-Encoding', 'content-length': out.length });
+        res.end(out);
+      });
+      return;
+    }
+    res.writeHead(code, { 'content-type': 'application/json', 'content-length': data.length, 'vary': 'Accept-Encoding' });
     res.end(data);
   };
   const notFound = () => send(404, { error: 'not_found' });
@@ -79,6 +107,38 @@ const server = http.createServer(async (req, res) => {
     }
     if (path === '/v1/owners') {
       send(200, exportOwners());
+      return;
+    }
+
+    if (path === '/v1/stream/events') {
+      // Server-Sent Events stream (global timeline)
+      const headers: Record<string, string> = {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        'connection': 'keep-alive',
+        'x-accel-buffering': 'no',
+      };
+      res.writeHead(200, headers);
+      const q = parsed.query as any;
+      const fromCursor = (q.fromCursor as string) || (q.cursor as string) || lastBroadcastCursor;
+      const limit = Math.max(1, Math.min(5000, Number(q.limit || 1000)));
+      const normalized = q.normalized === '1' || q.normalized === 'true';
+      const write = (event: string, payload: any) => {
+        try {
+          res.write(`event: ${event}\n`);
+          res.write(`data: ${JSON.stringify(payload)}\n\n`);
+        } catch {}
+      };
+      // initial backlog
+      try {
+        const { events, nextCursor } = exportEventsSinceCursor(fromCursor, limit, normalized);
+        if (events.length) write('events', { events, nextCursor });
+      } catch {}
+      // register client
+      const client = { write };
+      sseClients.add(client);
+      const ka = setInterval(() => { try { res.write(`:ka\n\n`); } catch {} }, 15000);
+      req.on('close', () => { clearInterval(ka); sseClients.delete(client); try { res.end(); } catch {} });
       return;
     }
     if (path === '/v1/market') {
@@ -150,6 +210,10 @@ const server = http.createServer(async (req, res) => {
 const wss = new WebSocketServer({ server, path: '/ws' });
 type Client = import('ws').WebSocket & { isAlive?: boolean };
 const clients = new Set<Client>();
+wss.shouldHandle = async (req) => {
+  // Allow all origins; tighten if needed
+  return true;
+};
 wss.on('connection', (ws: Client) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
@@ -169,6 +233,9 @@ function broadcast(payload: any) {
   const data = JSON.stringify(payload);
   for (const ws of clients) {
     try { ws.send(data); } catch {}
+  }
+  for (const c of sseClients) {
+    try { c.write('events', payload); } catch {}
   }
 }
 
