@@ -122,6 +122,7 @@ Base URL: `http://localhost:8080`
 
 - `GET /v1/health` — `{ ok, latest, lastSynced, behind }`
 - `GET /v1/progress` — full sync progress (deploy, lastSynced, latest, behind, last run timings)
+  - Includes runtime details when syncing: `{ runtime: { isSyncing, startFromBlock, latestTarget, totalBlocks, processedBlocks, processedLogs, windowSize, speedBlocksPerSec, etaSeconds, startedAt, updatedAt, completedAt, percent, statusLine } }`
 - `GET /v1/owners` — map of punkIndex → owner
 - `GET /v1/owners/:address` — list of punk indices owned by `:address`
 - `GET /v1/market` — `{ offers, bids, floor }`

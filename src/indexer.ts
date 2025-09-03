@@ -26,6 +26,47 @@ const TOPIC_NAME = new Map([
   [id('PunkBought(uint256,uint256,address,address)'), 'PunkBought'],
 ]);
 
+// Runtime progress shared with the HTTP server
+export type RuntimeProgress = {
+  isSyncing: boolean;
+  deployBlock: number | null;
+  startFromBlock: number | null;
+  latestTarget: number | null;
+  totalBlocks: number | null;
+  processedBlocks: number;
+  processedLogs: number;
+  windowSize: number | null;
+  speedBlocksPerSec: number | null;
+  etaSeconds: number | null;
+  startedAt: number | null;
+  updatedAt: number | null;
+  completedAt: number | null;
+  skipTimestamps: boolean;
+  statusLine: string | null;
+};
+
+let runtimeProgress: RuntimeProgress = {
+  isSyncing: false,
+  deployBlock: null,
+  startFromBlock: null,
+  latestTarget: null,
+  totalBlocks: null,
+  processedBlocks: 0,
+  processedLogs: 0,
+  windowSize: null,
+  speedBlocksPerSec: null,
+  etaSeconds: null,
+  startedAt: null,
+  updatedAt: null,
+  completedAt: null,
+  skipTimestamps: false,
+  statusLine: null,
+};
+
+export function getRuntimeProgress(): RuntimeProgress {
+  return { ...runtimeProgress };
+}
+
 function hexToAddress(topic: string | null | undefined): string | null {
   if (!topic || topic === '0x') return null;
   const hex = topic.toLowerCase();
@@ -213,6 +254,24 @@ export async function runSync(): Promise<void> {
 
   if (fromBlock > latestTarget) {
     console.log(`Up to date. last_synced_block=${lastSynced}, latest=${latestTarget}`);
+    const now = Date.now();
+    runtimeProgress = {
+      isSyncing: false,
+      deployBlock: Number.isFinite(deployBlock) ? Number(deployBlock) : null,
+      startFromBlock: fromBlock,
+      latestTarget,
+      totalBlocks: 0,
+      processedBlocks: 0,
+      processedLogs: 0,
+      windowSize: chunkSize,
+      speedBlocksPerSec: null,
+      etaSeconds: 0,
+      startedAt: now,
+      updatedAt: now,
+      completedAt: now,
+      skipTimestamps,
+      statusLine: 'Up to date',
+    };
     return;
   }
 
@@ -228,6 +287,25 @@ export async function runSync(): Promise<void> {
   let lastTickMs = Date.now();
   const EMA_ALPHA = 0.2; // 20% new sample, 80% history
   const skipTimestamps = process.env.SKIP_TIMESTAMPS === '1';
+
+  // initialize runtime progress
+  runtimeProgress = {
+    isSyncing: true,
+    deployBlock: Number.isFinite(deployBlock) ? Number(deployBlock) : null,
+    startFromBlock,
+    latestTarget,
+    totalBlocks,
+    processedBlocks: 0,
+    processedLogs: 0,
+    windowSize,
+    speedBlocksPerSec: null,
+    etaSeconds: null,
+    startedAt: t0,
+    updatedAt: t0,
+    completedAt: null,
+    skipTimestamps,
+    statusLine: null,
+  };
   const counters: { parsed: number; byType: Record<string, number> } = { parsed: 0, byType: Object.create(null) };
 
   function fmtNum(n: number | null) {
@@ -266,6 +344,22 @@ export async function runSync(): Promise<void> {
       pc.dim('|'), `${Math.max(0, speed).toFixed(0)} blk/s`,
       pc.dim('|'), `ETA ${fmtDuration(etaSec)}`
     ].filter(Boolean).join(' ');
+    // update runtime snapshot (plain string without ANSI)
+    const plainLine = [
+      'Sync', `${startFromBlock}→${latestTarget}`,
+      `${(pct * 100).toFixed(2)}%`, '|', `${processedBlocks}/${totalBlocks} blks`,
+      '|', `${processedLogs} logs`, '|', `win ${windowSize}`, '|', `${Math.max(0, speed).toFixed(0)} blk/s`, '|', `ETA ${isFinite(etaSec) ? Math.round(etaSec) + 's' : '—'}`
+    ].join(' ');
+    runtimeProgress = {
+      ...runtimeProgress,
+      processedBlocks,
+      processedLogs,
+      windowSize,
+      speedBlocksPerSec: Number.isFinite(speed) ? speed : null,
+      etaSeconds: Number.isFinite(etaSec) ? etaSec : null,
+      updatedAt: nowMs,
+      statusLine: plainLine,
+    };
     if (tty) {
       process.stdout.write(`\x1b[2K\r${line}`);
     } else {
@@ -617,8 +711,16 @@ export async function backfillTimestamps(): Promise<{ blocks: number; updated: n
           continue;
         }
         throw e;
-      }
-    }
+  }
+
+  // finalize runtime progress on completion
+  runtimeProgress = {
+    ...runtimeProgress,
+    isSyncing: false,
+    completedAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
 
     processedBlocks += slice.length;
     const dt = (Date.now() - t0) / 1000;
@@ -809,6 +911,12 @@ export function exportEventsSinceCursor(cursor: string | number | null, limit = 
 export function getLastSyncedBlock() {
   const db = openDb();
   const v = getMeta(db, 'last_synced_block', null);
+  return v != null ? Number(v) : null;
+}
+
+export function getDeployBlock(): number | null {
+  const db = openDb();
+  const v = getMeta(db, 'deploy_block', null);
   return v != null ? Number(v) : null;
 }
 

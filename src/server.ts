@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { JsonRpcProvider } from 'ethers';
-import { exportOwners, exportPunksByOwner, exportActiveOffers, exportActiveBids, exportFloor, exportEventsSinceCursor, exportEventsFiltered, formatCursor, parseCursor, getLastSyncedBlock } from './indexer.js';
+import { exportOwners, exportPunksByOwner, exportActiveOffers, exportActiveBids, exportFloor, exportEventsSinceCursor, exportEventsFiltered, formatCursor, parseCursor, getLastSyncedBlock, getRuntimeProgress, getDeployBlock } from './indexer.js';
 import { buildOpenApiSpec } from './openapi.js';
 import { runSync } from './indexer.js';
 
@@ -39,6 +39,9 @@ let progress: Progress = {
   lastRunCompletedAt: null,
   lastRunProcessed: null,
 };
+
+// Initialize deploy block if available
+try { progress.deployBlock = getDeployBlock(); } catch {}
 
 let lastBroadcastCursor = formatCursor(progress.lastSynced || 0, -1);
 const sseClients = new Set<{ write: (event: string, payload: any) => void }>();
@@ -166,7 +169,30 @@ const server = http.createServer(async (req, res) => {
     }
     if (path === '/v1/progress') {
       await updateLatest();
-      send(200, progress);
+      const rt = getRuntimeProgress();
+      // Derive percent if possible
+      const percent = (rt.totalBlocks && rt.totalBlocks > 0) ? (rt.processedBlocks / rt.totalBlocks) : null;
+      send(200, {
+        ...progress,
+        runtime: {
+          isSyncing: rt.isSyncing,
+          deployBlock: rt.deployBlock,
+          startFromBlock: rt.startFromBlock,
+          latestTarget: rt.latestTarget,
+          totalBlocks: rt.totalBlocks,
+          processedBlocks: rt.processedBlocks,
+          processedLogs: rt.processedLogs,
+          windowSize: rt.windowSize,
+          speedBlocksPerSec: rt.speedBlocksPerSec,
+          etaSeconds: rt.etaSeconds,
+          startedAt: rt.startedAt,
+          updatedAt: rt.updatedAt,
+          completedAt: rt.completedAt,
+          skipTimestamps: rt.skipTimestamps,
+          percent,
+          statusLine: rt.statusLine,
+        },
+      });
       return;
     }
     if (path === '/v1/owners') {
