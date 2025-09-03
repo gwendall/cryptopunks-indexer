@@ -723,6 +723,88 @@ export function exportEventsNormalized(punkIndex = null) {
   return out;
 }
 
+// Helpers for API server
+export function parseCursor(input: string | number | null | undefined): { bn: number; li: number } {
+  if (input == null) return { bn: -1, li: -1 };
+  if (typeof input === 'number') {
+    const bn = Math.floor(input / 1_000_000);
+    const li = input % 1_000_000;
+    return { bn, li };
+  }
+  const s = String(input);
+  if (s.includes(':')) {
+    const [a, b] = s.split(':');
+    const bn = Number(a);
+    const li = Number(b);
+    return { bn, li };
+  }
+  const n = Number(s);
+  if (Number.isFinite(n)) return parseCursor(n);
+  return { bn: -1, li: -1 };
+}
+
+export function formatCursor(bn: number, li: number): string {
+  return `${bn}:${li}`;
+}
+
+export function exportEventsSinceCursor(cursor: string | number | null, limit = 1000, normalized = false) {
+  const db = openDb();
+  const { bn, li } = parseCursor(cursor);
+  const where = bn < 0 ? '' : ' WHERE (block_number > ?) OR (block_number = ? AND log_index > ?)';
+  const params = bn < 0 ? [] : [bn, bn, li];
+  const baseCols = `punk_index AS punkIndex, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex`;
+  const queries = [
+    { type: 'Assign', sql: `SELECT 'Assign' as type, ${baseCols}, NULL AS fromAddress, to_address AS toAddress, NULL AS valueWei, NULL AS minValueWei FROM assigns${where}` },
+    { type: 'PunkTransfer', sql: `SELECT 'PunkTransfer' as type, ${baseCols}, from_address AS fromAddress, to_address AS toAddress, NULL AS valueWei, NULL AS minValueWei FROM transfers${where}` },
+    { type: 'PunkOffered', sql: `SELECT 'PunkOffered' as type, ${baseCols}, NULL AS fromAddress, to_address AS toAddress, NULL AS valueWei, min_value_wei AS minValueWei FROM offers${where}` },
+    { type: 'PunkNoLongerForSale', sql: `SELECT 'PunkNoLongerForSale' as type, ${baseCols}, NULL AS fromAddress, NULL AS toAddress, NULL AS valueWei, NULL AS minValueWei FROM offer_cancellations${where}` },
+    { type: 'PunkBidEntered', sql: `SELECT 'PunkBidEntered' as type, ${baseCols}, from_address AS fromAddress, NULL AS toAddress, value_wei AS valueWei, NULL AS minValueWei FROM bids${where}` },
+    { type: 'PunkBidWithdrawn', sql: `SELECT 'PunkBidWithdrawn' as type, ${baseCols}, from_address AS fromAddress, NULL AS toAddress, value_wei AS valueWei, NULL AS minValueWei FROM bid_withdrawals${where}` },
+    { type: 'PunkBought', sql: `SELECT 'PunkBought' as type, ${baseCols}, from_address AS fromAddress, to_address AS toAddress, value_wei AS valueWei, NULL AS minValueWei FROM buys${where}` },
+  ];
+  let rows: any[] = [];
+  for (const q of queries) {
+    rows = rows.concat(db.prepare(q.sql + ` LIMIT ?`).all(...(params.length ? params : []), limit));
+  }
+  rows.sort((a, b) => (a.blockNumber - b.blockNumber) || (a.logIndex - b.logIndex));
+  if (rows.length > limit) rows = rows.slice(0, limit);
+  const nextCursor = rows.length ? formatCursor(rows[rows.length - 1].blockNumber, rows[rows.length - 1].logIndex) : formatCursor(bn, li);
+  if (!normalized) return { events: rows, nextCursor };
+  const mapped = rows.map((e) => {
+    let type;
+    switch (e.type) {
+      case 'Assign': type = 'claim'; break;
+      case 'PunkTransfer': type = 'transfer'; break;
+      case 'PunkOffered': type = 'list'; break;
+      case 'PunkNoLongerForSale': type = 'list_cancel'; break;
+      case 'PunkBidEntered': type = 'bid'; break;
+      case 'PunkBidWithdrawn': type = 'bid_cancel'; break;
+      case 'PunkBought': type = 'sale'; break;
+      default: type = e.type; break;
+    }
+    const valueWei = e.valueWei ?? e.minValueWei ?? null;
+    return {
+      type,
+      punk_id: e.punkIndex,
+      from_address: e.fromAddress ?? null,
+      to_address: e.toAddress ?? null,
+      value_wei: valueWei != null ? String(valueWei) : null,
+      block_number: e.blockNumber,
+      block_timestamp: e.blockTimestamp ?? null,
+      tx_hash: e.txHash,
+      log_index: e.logIndex,
+      cursor: formatCursor(e.blockNumber, e.logIndex),
+    };
+  });
+  return { events: mapped, nextCursor };
+}
+
+export function getLastSyncedBlock() {
+  const db = openDb();
+  const v = getMeta(db, 'last_synced_block', null);
+  return v != null ? Number(v) : null;
+}
+
 export function exportActiveOffers(limit = null) {
   const db = openDb();
   const sql = `SELECT punk_index AS punkIndex, min_value_wei AS minValueWei, to_address AS toAddress, block_number AS blockNumber, block_timestamp AS blockTimestamp, tx_hash AS txHash, log_index AS logIndex FROM offers WHERE active = 1 ORDER BY CAST(min_value_wei AS INTEGER) ASC, block_number ASC ${limit ? 'LIMIT ?' : ''}`;

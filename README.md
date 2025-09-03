@@ -27,11 +27,11 @@ Indexes on‑chain CryptoPunks activity into a local SQLite database and exports
 
 ```
 npm install   # or: pnpm install | yarn install
-npm run sync      # first run; for full accuracy, start from block 0
-npm run export    # writes data/owners.json
+pnpm start        # starts API server + sync (initial catch‑up, then realtime)
+pnpm run export   # writes data/owners.json
 ```
 
-Optional continuous mode (poll every 15s):
+Optional CLI-only sync (poll every 15s):
 
 ```
 TAIL=1 npm run sync
@@ -52,13 +52,13 @@ Build and run (persist `./data` locally):
 
 ```
 docker build -t cryptopunks-indexer .
-docker run --rm -it --env-file .env -v "$PWD/data:/app/data" cryptopunks-indexer
+docker run --rm -it --env-file .env -p 8080:8080 -v "$PWD/data:/app/data" cryptopunks-indexer
 ```
 
 Continuous indexing:
 
 ```
-docker run --rm -it --env-file .env -e TAIL=1 -v "$PWD/data:/app/data" cryptopunks-indexer
+docker run --rm -it --env-file .env -p 8080:8080 -e TAIL=1 -v "$PWD/data:/app/data" cryptopunks-indexer
 ```
 
 ## Quick Start (Docker Compose)
@@ -82,6 +82,19 @@ Stops with `docker compose down`. Data persists in `./data`.
 - `DEPLOY_BLOCK` (optional): CryptoPunks contract deploy block. If not set, the indexer auto-discovers it (via getCode binary search) and saves it to the DB meta table.
 - `SKIP_TIMESTAMPS` (optional): `1` to skip fetching block timestamps for speed. Default: `0`.
 - `FILTER_TOPICS` (optional): `1` to request only the tracked event topics (smaller responses; some providers behave better). Default: `0`.
+ - `PORT` (optional): HTTP port for the built-in server. Default: `8080`.
+
+## API (built‑in server)
+
+Base URL: `http://localhost:8080`
+
+- `GET /v1/health` — `{ ok, latest, lastSynced, behind }`
+- `GET /v1/progress` — full sync progress (deploy, lastSynced, latest, behind, last run timings)
+- `GET /v1/owners` — map of punkIndex → owner
+- `GET /v1/market` — `{ offers, bids, floor }`
+- `GET /v1/events?fromCursor=&limit=1000` — unified events with `cursor` for paging
+- `GET /v1/events/normalized?fromCursor=&limit=1000` — normalized events (claim/list/bid/sale/transfer)
+- WebSocket: `ws://localhost:8080/ws` — pushes `{ type: 'events', events: [...] }` after each sync batch
 
 Provider tips:
 - The indexer auto-adapts the block range if your provider rejects large `eth_getLogs` windows (e.g., Alchemy Free limits to 10 blocks).
@@ -170,7 +183,8 @@ npm run sync -- --reset
 
 ## Commands
 
-- `npm run sync`: Index chain data into SQLite (incremental). Set `TAIL=1` to keep indexing new blocks. Optionally add `ETH_WS_URL` for near‑realtime triggers.
+- `pnpm start`: Run the built‑in HTTP + WebSocket server and the indexer. Handles initial catch‑up, then keeps up in realtime. REST on `:8080`, WS on `/ws`.
+- `npm run sync`: CLI mode to run a single catch‑up loop (or tail with `TAIL=1`). With the server, you generally won’t need this.
   - Reset from scratch: `npm run sync -- --reset` (deletes `data/punks.sqlite` and resumes from deploy block)
   - Verbose parsing logs (sample per chunk): `npm run sync -- --verbose` (or set `VERBOSE=1`)
 - `npm run export`: Export all snapshots (owners, grouped ops, timeline) into `data/`.
@@ -225,7 +239,7 @@ All outputs are deterministic, stable‑sorted by `blockNumber` then `logIndex` 
 ## Hosting Options (simple)
 
 - Render (Worker + Persistent Disk)
-  - Worker: command `node --import tsx src/index.ts sync`; env `ETH_RPC_URL`, `TAIL=1`
+  - Worker: command `node --import tsx src/server.ts`; env `ETH_RPC_URL` (and optional tuning)
   - Add a persistent disk mounted at `/app/data`
 
 - Railway (Service + Volume)
