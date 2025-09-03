@@ -252,6 +252,85 @@ All outputs are deterministic, stable‑sorted by `blockNumber` then `logIndex` 
 
 Note: Heroku’s filesystem is ephemeral; prefer a disk‑backed host or switch to Postgres.
 
+## Deploy on DigitalOcean (Droplet)
+
+Recommended droplet sizes:
+- Basic API + fast backfill: $16/mo (2 GB RAM, 1 vCPU). Good baseline.
+- Faster initial catch‑up or heavier API load: $24–$32/mo (2–4 GB RAM, 2 vCPUs).
+- Minimal works too ($8/mo, 1 GB) but backfill will be slower and more sensitive to provider shaping.
+Storage: 35 GB NVMe is plenty (SQLite DB is small).
+
+Step‑by‑step (Ubuntu 22.04/24.04):
+1) Create a Droplet
+   - Choose region near you.
+   - Size: start with $16/mo; bump up if you want faster initial backfill.
+   - Add your SSH key.
+   - Optional: add a VPC firewall allowing TCP 22 (SSH) and 8080 (API). If you plan to use a reverse proxy, open 80/443.
+
+2) SSH in and install dependencies
+```
+sudo apt-get update -y
+sudo apt-get install -y git build-essential sqlite3 curl
+# Install Node.js 22 (Nodesource)
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs
+# Enable pnpm via corepack (bundled with Node 18+)
+sudo corepack enable
+sudo corepack prepare pnpm@9 --activate
+```
+
+3) Pull the repo and configure env
+```
+git clone https://github.com/gwendall/cryptopunks-indexer.git
+cd cryptopunks-indexer/indexer
+cp .env.example .env
+```
+Edit `.env` and set at minimum:
+- `ETH_RPC_URL=<your Alchemy HTTPS URL>` (PAYG recommended). Optional: `FILTER_TOPICS=1`, `CHUNK_SIZE=20000`, `SKIP_TIMESTAMPS=1` for the fastest initial backfill; remove `SKIP_TIMESTAMPS` afterward or run the timestamp backfill command.
+
+4) Install and run
+```
+pnpm install
+pnpm start
+```
+This starts the sync (initial catch‑up) and serves the API on `:8080`.
+
+5) Keep it running across restarts (systemd)
+```
+sudo tee /etc/systemd/system/punks-indexer.service >/dev/null <<'UNIT'
+[Unit]
+Description=CryptoPunks Indexer
+After=network.target
+
+[Service]
+WorkingDirectory=/root/cryptopunks-indexer/indexer
+EnvironmentFile=/root/cryptopunks-indexer/indexer/.env
+ExecStart=/usr/bin/env pnpm start
+Restart=always
+RestartSec=5
+User=root
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now punks-indexer
+```
+
+6) (Optional) Open the firewall
+```
+sudo ufw allow 22/tcp
+sudo ufw allow 8080/tcp
+sudo ufw enable
+```
+
+7) (Optional) Put it behind a reverse proxy
+- Point Nginx/Caddy to `http://127.0.0.1:8080` and terminate TLS on 443.
+
+That’s it. The API is now available at `http://<droplet-ip>:8080` and will survive reboots. The indexer persists data in `data/` and resumes from the last synced block.
+
 ## Persistence & DB
 
 - Default: SQLite at `data/punks.sqlite` (portable, zero‑config)
