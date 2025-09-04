@@ -110,10 +110,11 @@ Setup (one time):
 - Configure PM2 to auto-start on boot: `pnpm run pm2:startup` (then follow printed instructions)
 
 Start/Manage:
-- Start: `pnpm run pm2:start`
-- Status: `pm2 ls`
+- First start: `pnpm run pm2:start`
+- Status: `pnpm run pm2:status`
 - Logs: `pnpm run pm2:logs` (files are in `data/pm2-*.log`)
-- Restart after an update: `pnpm run pm2:restart`
+- Restart after an update: `pnpm run pm2:restart` (idempotent; creates if missing)
+- Zero‑downtime reload: `pnpm run pm2:reload`
 - Stop: `pnpm run pm2:stop`
 - Persist process list: `pnpm run pm2:save`
 
